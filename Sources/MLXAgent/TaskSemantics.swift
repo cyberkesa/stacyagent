@@ -495,12 +495,9 @@ struct EvidenceStore: Sendable {
     private var itemRevisions: [ArtifactRevisionID?] = []
     private var current: [String: ArtifactRevisionID] = [:]
 
-    mutating func append(_ evidence: TaskEvidence) {
-        items.append(evidence)
-        itemRevisions.append(nil)
-    }
-
     /// Canonical append: legacy item + revision link + typed record, atomically.
+    /// This is the ONLY mutation path for the journal: items[] (legacy
+    /// projection) can never diverge from records[] (structured truth).
     mutating func append(
         _ evidence: TaskEvidence,
         revision: ArtifactRevisionID?,
@@ -515,11 +512,6 @@ struct EvidenceStore: Sendable {
 
     mutating func setCurrentRevisions(_ map: [String: ArtifactRevisionID]) {
         current = map
-    }
-
-    /// Append a typed journal record without a legacy item (diagnostics).
-    mutating func appendRecord(_ record: EvidenceRecord) {
-        records.append(record)
     }
 
     /// Parallel revision list for snapshot/diagnostics.
@@ -542,6 +534,16 @@ struct EvidenceStore: Sendable {
         self.itemRevisions = itemRevisions
         self.records = records
         self.current = map
+    }
+
+    /// Structural invariant: items and records are always 1:1.
+    /// Legacy items are a derived projection of the canonical records.
+    func checkConsistency() -> Bool {
+        guard items.count == records.count,
+              itemRevisions.count == items.count else {
+            return false
+        }
+        return true
     }
 
     /// Revision bound to a legacy item index (test/diagnostic introspection).
@@ -574,10 +576,16 @@ struct EvidenceStore: Sendable {
 
     /// Writer-knows rule (§7): our own fresh mutation of the CURRENT revision
     /// observes it — no extra disk readback is needed after an atomic edit.
-    /// Applies only to tracked paths with a revision-bound mutation record,
-    /// so blind writes can never satisfy observation on unknown state.
+    /// Applies ONLY to EditEngine atomic tools with deterministic in-memory
+    /// resulting content (write/edit/range). Shell, external processes, MCP
+    /// and any unknown side effect NEVER qualify: their resulting bytes are
+    /// unknown, so only a fresh observe/hash counts.
     /// (Tool-level ProtocolEngine.blockReason additionally rejects mutations
     /// that precede the first observation.)
+    private static let knownResultTools: Set<String> = [
+        "write_file", "edit_file", "edit_file_range"
+    ]
+
     private func writerKnows(target: TargetSelector, after: Int?) -> Bool {
         guard let path = target.path,
               let currentRevision = current[path] else {
@@ -586,7 +594,8 @@ struct EvidenceStore: Sendable {
         let lowerBound = after ?? -1
         return items.indices.contains { index in
             guard index > lowerBound else { return false }
-            guard case .mutated(_, let itemPath, _, _) = items[index],
+            guard case .mutated(let tool, let itemPath, _, _) = items[index],
+                  Self.knownResultTools.contains(tool),
                   target.matches(itemPath) else {
                 return false
             }

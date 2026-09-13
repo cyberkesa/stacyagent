@@ -86,6 +86,9 @@ final class ArtifactGraph: @unchecked Sendable {
     /// them; persistence carries them inside node.revisions).
     private var externalRecords: [ArtifactRevisionID: ArtifactRevision] = [:]
     private var lastExternal: [String: ArtifactRevisionID] = [:]
+    /// Revision IDs that must never be evicted: referenced by evidence
+    /// journal, edit transactions, checkpoints or persisted tasks.
+    private var pinned: Set<ArtifactRevisionID> = []
 
     init() {}
 
@@ -154,10 +157,10 @@ final class ArtifactGraph: @unchecked Sendable {
             if let language { node.language = language }
             if let taskID { node.taskIDs.insert(taskID) }
             if !node.history.contains(revision.id) {
+                // No live cap: eviction happens only in retain(pinned:),
+                // which keeps newest 50 UNION pinned. Live history is just
+                // UUIDs; bounding happens at persist time (v0.29.1 inv.4).
                 node.history.append(revision.id)
-                if node.history.count > Self.historyCap {
-                    node.history.removeFirst(node.history.count - Self.historyCap)
-                }
             }
             nodes[revision.path] = node
             return moved
@@ -225,9 +228,6 @@ final class ArtifactGraph: @unchecked Sendable {
             node.exists = exists
             node.kind = ArtifactType.infer(path: path)
             node.history.append(revision.id)
-            if node.history.count > Self.historyCap {
-                node.history.removeFirst(node.history.count - Self.historyCap)
-            }
             nodes[path] = node
             externalRecords[revision.id] = revision
             lastExternal[path] = revision.id
@@ -244,6 +244,28 @@ final class ArtifactGraph: @unchecked Sendable {
         lock.withLock {
             guard let current = nodes[path]?.currentRevisionID else { return false }
             return lastExternal[path] == current
+        }
+    }
+
+    /// Declare the referenced set, then prune history to
+    /// (newest 50 per node) UNION pinned. Pinned metadata always stays
+    /// resolvable via snapshot(); unpinned overflow compacts to IDs.
+    /// Called with the journal+transaction+checkpoint closure before persist.
+    func retain(pinned ids: Set<ArtifactRevisionID>) {
+        lock.withLock {
+            pinned = ids
+            for path in nodes.keys {
+                guard var node = nodes[path] else { continue }
+                if node.history.count > Self.historyCap {
+                    let overflow = node.history.dropLast(Self.historyCap)
+                    let keepOverflow = overflow.filter { pinned.contains($0) }
+                    node.history = keepOverflow + node.history.suffix(Self.historyCap)
+                    nodes[path] = node
+                }
+            }
+            externalRecords = externalRecords.filter { id, _ in
+                pinned.contains(id) || nodes.values.contains { $0.history.contains(id) }
+            }
         }
     }
 
@@ -277,6 +299,11 @@ final class ArtifactGraph: @unchecked Sendable {
             }
             return PersistedArtifactGraph(schemaVersion: Self.schemaVersion, nodes: persisted)
         }
+    }
+
+    /// IDs currently protected from eviction (diagnostics/tests).
+    func pinnedIDs() -> Set<ArtifactRevisionID> {
+        lock.withLock { pinned }
     }
 
     func restore(_ persisted: PersistedArtifactGraph) {

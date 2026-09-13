@@ -1894,6 +1894,15 @@ for line in sys.stdin:
             }
         }
 
+        // v0.29.1 Evidence Integrity Hardening scenarios A-G.
+        for result in await ArtifactSelfTest.runHardening() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
         let total = passed + failures.count
         if failures.isEmpty {
             return "SLTA self-test: PASS \(passed)/\(total)"

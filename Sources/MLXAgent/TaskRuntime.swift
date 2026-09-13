@@ -361,7 +361,18 @@ actor RuntimeState {
 
             validation.lastValidation = name
         } else {
-            evidenceStore.append(.observed(tool: name, path: effectivePath))
+            evidenceStore.append(
+                .observed(tool: name, path: effectivePath),
+                revision: revisionID,
+                record: EvidenceRecord(
+                    taskID: currentTaskID(),
+                    kind: .observed,
+                    tool: name,
+                    path: effectivePath,
+                    revisionID: revisionID?.rawValue,
+                    detail: "observed" + (effectivePath.map { " " + $0 } ?? "")
+                )
+            )
         }
 
         updateValidationCompatibility()
@@ -545,25 +556,6 @@ actor RuntimeState {
 
     private func currentTaskID() -> String {
         spec.map { "\($0.id)" } ?? "no-task"
-    }
-
-    private func record(
-        kind: EvidenceKind,
-        tool: String,
-        path: String?,
-        revision: ArtifactRevisionID?,
-        detail: String
-    ) {
-        evidenceStore.appendRecord(EvidenceRecord(
-            id: UUID(),
-            taskID: currentTaskID(),
-            kind: kind,
-            tool: tool,
-            path: path,
-            revisionID: revision?.rawValue,
-            createdAt: Date(),
-            detail: detail
-        ))
     }
 
     /// Restart restore: rebuild evidence truth from persisted records.

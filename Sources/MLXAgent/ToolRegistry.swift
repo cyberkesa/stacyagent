@@ -1033,6 +1033,11 @@ final class ToolRegistry: @unchecked Sendable {
             return true
         }
 
+        // v0.29.1 TOCTOU: base moved under us — retry on fresh observation.
+        if SemanticToolCatalog.isMutating(tool), lower.contains("revision conflict") {
+            return true
+        }
+
         guard tool == "edit_file" || tool == "edit_file_range" else { return false }
 
         let markers = [
@@ -1190,6 +1195,12 @@ extension ToolRegistry {
         let snap = await state.taskSnapshot()
         let records = await state.journalRecords()
         let store = RuntimePersistence(projectPath: runtime.projectPath)
+        // v0.29.1 retention: pin journal+transaction+checkpoint revisions
+        // BEFORE the graph snapshot, so referenced metadata is always carried.
+        workspace.graph.retain(pinned: workspace.pinnedRevisionIDs(
+            journal: records,
+            current: snap.artifactRevisions
+        ))
         let graphSnap = workspace.graph.snapshot(revisionProvider: { [workspace] id in
             workspace.revisionRecord(id)
         })

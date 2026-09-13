@@ -122,6 +122,10 @@ enum RevisionOrigin: String, Codable, Sendable {
     case task
     case external
     case observed
+    /// New revision restoring earlier content (undo/rollback).
+    case rollback
+    /// New revision restoring a checkpoint.
+    case restore
 }
 
 struct EditLineRange: Codable, Hashable, Sendable, CustomStringConvertible {
@@ -312,7 +316,8 @@ final class RevisionStore: @unchecked Sendable {
     func prepareRevision(
         path: String,
         content: String,
-        originTask: String?
+        originTask: String?,
+        origin: RevisionOrigin = .task
     ) throws -> ArtifactRevision {
         lock.lock()
         defer { lock.unlock() }
@@ -323,7 +328,8 @@ final class RevisionStore: @unchecked Sendable {
             number: number,
             content: content,
             originTask: originTask,
-            state: .proposed
+            state: .proposed,
+            origin: origin
         )
         persistLocked()
         return revision
@@ -412,7 +418,8 @@ final class RevisionStore: @unchecked Sendable {
         number: Int,
         content: String?,
         originTask: String?,
-        state revisionState: ArtifactRevisionState
+        state revisionState: ArtifactRevisionState,
+        origin: RevisionOrigin = .task
     ) throws -> ArtifactRevision {
         let id = ArtifactRevisionID()
         let snapshotFile = id.rawValue.uuidString.lowercased() + ".txt"
@@ -432,7 +439,7 @@ final class RevisionStore: @unchecked Sendable {
             createdAt: Date(),
             state: revisionState,
             contentHash: ArtifactHash.sha256(content ?? ""),
-            origin: .task
+            origin: origin
         )
         state.revisions.append(revision)
         return revision
@@ -625,7 +632,8 @@ final class EditEngine: @unchecked Sendable {
         after: String,
         operation: EditOperationKind,
         rollbackOf: EditTransactionID? = nil,
-        checkpointID: CheckpointID? = nil
+        checkpointID: CheckpointID? = nil,
+        origin: RevisionOrigin = .task
     ) throws -> PreparedEdit {
         let task = currentTask()
         let base = try revisions.synchronize(
@@ -655,7 +663,8 @@ final class EditEngine: @unchecked Sendable {
         let proposed = try revisions.prepareRevision(
             path: path,
             content: after,
-            originTask: task
+            originTask: task,
+            origin: origin
         )
 
         let proposal = EditProposal(
@@ -814,7 +823,8 @@ final class EditEngine: @unchecked Sendable {
             before: currentContent,
             after: baseContent,
             operation: .rollback,
-            rollbackOf: original.id
+            rollbackOf: original.id,
+            origin: .rollback
         )
     }
 
@@ -858,7 +868,8 @@ final class EditEngine: @unchecked Sendable {
             before: currentContent,
             after: targetContent,
             operation: .restoreCheckpoint,
-            checkpointID: checkpoint.id
+            checkpointID: checkpoint.id,
+            origin: .restore
         )
     }
 

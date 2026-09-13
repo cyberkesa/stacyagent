@@ -12,56 +12,59 @@ struct ArtifactCheckResult {
 }
 
 enum ArtifactSelfTest {
+    static let v1 = "<html><body>v1</body></html>"
+    static let v2 = "<html><body>v2 extended</body></html>"
+
+    static func makeProject() throws -> (URL, Workspace, RuntimeState) {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slta-art-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let runtime = RuntimeEnvironment.probe(projectURL: dir)
+        let workspace = Workspace(
+            root: dir,
+            shellTimeoutSeconds: 20,
+            policy: PolicyEngine(mode: .workspace, allowMCP: false),
+            runtime: runtime
+        )
+        return (dir, workspace, RuntimeState())
+    }
+
+    static func specFor(_ path: String) -> TaskSpec {
+        TaskSpec(
+            id: TaskID(),
+            parentID: nil,
+            mode: .agent,
+            kinds: [.modify],
+            originalRequest: "test",
+            targets: [ArtifactRef(path: path)],
+            launchApplication: nil,
+            desiredState: [],
+            requirements: [
+                .observe(.path(path)),
+                .mutate(.path(path)),
+                .validate(.path(path))
+            ],
+            constraints: [],
+            outputPolicy: .deterministicAck,
+            compileConfidence: 1.0,
+            compilerNotes: []
+        )
+    }
+
+    static func cleanup(_ dir: URL) {
+        try? FileManager.default.removeItem(at: dir)
+        let store = RuntimePersistence(projectPath: dir.path)
+        try? FileManager.default.removeItem(at: store.directory)
+    }
+
     static func runAll() async -> [ArtifactCheckResult] {
         var out: [ArtifactCheckResult] = []
         func record(_ passed: Bool, _ name: String) {
             out.append(ArtifactCheckResult(passed: passed, name: name))
         }
 
-        let v1 = "<html><body>v1</body></html>"
-        let v2 = "<html><body>v2 extended</body></html>"
-
-        func makeProject() throws -> (URL, Workspace, RuntimeState) {
-            let dir = FileManager.default.temporaryDirectory
-                .appendingPathComponent("slta-art-\(UUID().uuidString)", isDirectory: true)
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            let runtime = RuntimeEnvironment.probe(projectURL: dir)
-            let workspace = Workspace(
-                root: dir,
-                shellTimeoutSeconds: 20,
-                policy: PolicyEngine(mode: .workspace, allowMCP: false),
-                runtime: runtime
-            )
-            return (dir, workspace, RuntimeState())
-        }
-
-        func specFor(_ path: String) -> TaskSpec {
-            TaskSpec(
-                id: TaskID(),
-                parentID: nil,
-                mode: .agent,
-                kinds: [.modify],
-                originalRequest: "test",
-                targets: [ArtifactRef(path: path)],
-                launchApplication: nil,
-                desiredState: [],
-                requirements: [
-                    .observe(.path(path)),
-                    .mutate(.path(path)),
-                    .validate(.path(path))
-                ],
-                constraints: [],
-                outputPolicy: .deterministicAck,
-                compileConfidence: 1.0,
-                compilerNotes: []
-            )
-        }
-
-        func cleanup(_ dir: URL) {
-            try? FileManager.default.removeItem(at: dir)
-            let store = RuntimePersistence(projectPath: dir.path)
-            try? FileManager.default.removeItem(at: store.directory)
-        }
+        let v1 = Self.v1
+        let v2 = Self.v2
 
         // A. read r1 -> observed(r1), fresh.
         do {
@@ -411,3 +414,317 @@ enum ArtifactSelfTest {
     }
 }
 
+
+// MARK: - v0.29.1 Evidence Integrity Hardening (A-G)
+
+extension ArtifactSelfTest {
+    static func makeRegistryProject() throws
+        -> (URL, Workspace, RuntimeState, ToolRegistry)
+    {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("slta-hard-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let policy = PolicyEngine(mode: .workspace, allowMCP: false)
+        let runtime = RuntimeEnvironment.probe(projectURL: dir)
+        let workspace = Workspace(
+            root: dir,
+            shellTimeoutSeconds: 20,
+            policy: policy,
+            runtime: runtime
+        )
+        let registry = ToolRegistry(
+            workspace: workspace,
+            mcp: MCPBridge(policy: policy),
+            events: EventBus(sink: NullSink()),
+            runtime: runtime
+        )
+        return (dir, workspace, RuntimeState(), registry)
+    }
+
+    static func runHardening() async -> [ArtifactCheckResult] {
+        var out: [ArtifactCheckResult] = []
+        func record(_ passed: Bool, _ name: String) {
+            out.append(ArtifactCheckResult(passed: passed, name: name))
+        }
+
+        // A. own r1->r2 mutation evidence is bound to the resulting r2.
+        do {
+            let (dir, ws, state) = try makeProject()
+            defer { cleanup(dir) }
+            await state.beginTask(specFor("a.html"))
+            _ = try ws.writeFile("a.html", content: v1)
+            let r1 = ws.graph.currentRevisionID(path: "a.html")
+            await state.mutation("write_file", path: "a.html", content: v1,
+                                 changed: true, revisionID: r1)
+            _ = try ws.editFile("a.html", old: "v1", new: "v2 extended")
+            let r2 = ws.graph.currentRevisionID(path: "a.html")
+            await state.mutation("edit_file", path: "a.html", content: nil,
+                                 changed: true, revisionID: r2)
+            await state.setCurrentRevisions(ws.graph.currentMap())
+            let journal = await state.journalRecords()
+            let bound = journal.last { $0.kind == .mutation }?.revisionID
+            let meta = r2.flatMap { ws.revisionRecord($0) }
+            record(r1 != nil && r2 != nil && r1 != r2 &&
+                   bound == r2?.rawValue &&
+                   meta?.contentHash == ArtifactHash.sha256(v2),
+                   "hard-A mutation bound to resulting revision")
+        } catch {
+            record(false, "hard-A mutation bound to resulting revision")
+        }
+
+        // B. external r2->r3: mutation(r2) stays a historical fact, not fresh.
+        do {
+            let (dir, ws, state) = try makeProject()
+            defer { cleanup(dir) }
+            await state.beginTask(specFor("a.html"))
+            _ = try ws.writeFile("a.html", content: v1)
+            await state.mutation("write_file", path: "a.html", content: v1,
+                                 changed: true,
+                                 revisionID: ws.graph.currentRevisionID(path: "a.html"))
+            _ = try ws.validateFile("a.html")
+            await state.validationSuccess("validate_file", isRealValidation: true,
+                                          path: "a.html",
+                                          revisionID: ws.graph.currentRevisionID(path: "a.html"))
+            await state.setCurrentRevisions(ws.graph.currentMap())
+            try Data("external".utf8).write(
+                to: dir.appendingPathComponent("a.html"), options: .atomic)
+            _ = try ws.readFile("a.html")
+            await state.setCurrentRevisions(ws.graph.currentMap())
+            let snapshot = await state.taskSnapshot()
+            let journal = await state.journalRecords()
+            let historyKept = journal.contains {
+                $0.kind == .validation && $0.path == "a.html"
+            }
+            record(snapshot.missingRequirements.contains(.validate(.path("a.html"))) &&
+                   historyKept,
+                   "hard-B external change keeps history, drops freshness")
+        } catch {
+            record(false, "hard-B external change keeps history, drops freshness")
+        }
+
+        // C. restoring r1 content while current=r2 yields NEW r3 (rollback origin).
+        do {
+            let (dir, ws, _) = try makeProject()
+            defer { cleanup(dir) }
+            _ = try ws.writeFile("a.html", content: v1)
+            let r1 = ws.graph.currentRevisionID(path: "a.html")
+            _ = try ws.editFile("a.html", old: "v1", new: "v2 extended")
+            _ = try ws.rollbackLastEdit("a.html")
+            let r3 = ws.graph.currentRevisionID(path: "a.html")
+            let meta = r3.flatMap { ws.revisionRecord($0) }
+            let disk = try String(contentsOf: dir.appendingPathComponent("a.html"),
+                                  encoding: .utf8)
+            record(r1 != nil && r3 != nil && r1 != r3 &&
+                   disk == v1 &&
+                   meta?.contentHash == ArtifactHash.sha256(v1) &&
+                   meta?.origin == .rollback &&
+                   ws.graph.currentHash(path: "a.html") == ArtifactHash.sha256(v1),
+                   "hard-C undo creates new revision, not r1")
+        } catch {
+            record(false, "hard-C undo creates new revision, not r1")
+        }
+
+        // D. pinned old revision stays resolvable past 50 later revisions.
+        do {
+            let (dir, ws, state) = try makeProject()
+            defer { cleanup(dir) }
+            await state.beginTask(specFor("a.html"))
+            _ = try ws.writeFile("a.html", content: v1)
+            await state.mutation("write_file", path: "a.html", content: v1,
+                                 changed: true,
+                                 revisionID: ws.graph.currentRevisionID(path: "a.html"))
+            _ = try ws.validateFile("a.html")
+            await state.validationSuccess("validate_file", isRealValidation: true,
+                                          path: "a.html",
+                                          revisionID: ws.graph.currentRevisionID(path: "a.html"))
+            let pinnedID = ws.graph.currentRevisionID(path: "a.html")
+            var toggle = false
+            for i in 0..<60 {
+                toggle.toggle()
+                _ = try ws.editFile("a.html", old: toggle ? "v1" : "v2",
+                                    new: toggle ? "v2" : "v1 #\(i)")
+                await state.mutation("edit_file", path: "a.html", content: nil,
+                                     changed: true,
+                                     revisionID: ws.graph.currentRevisionID(path: "a.html"))
+            }
+            await state.setCurrentRevisions(ws.graph.currentMap())
+            let journal = await state.journalRecords()
+            ws.graph.retain(pinned: ws.pinnedRevisionIDs(
+                journal: journal,
+                current: ws.graph.currentMap()
+            ))
+            let resolved = pinnedID.flatMap { ws.revisionRecord($0) }
+            let snap = ws.graph.snapshot(revisionProvider: { ws.revisionRecord($0) })
+            let carried = snap.nodes.first { $0.path == "a.html" }?
+                .revisions.contains { $0.id == pinnedID }
+            record(resolved != nil && (carried ?? false) &&
+                   ws.graph.pinnedIDs().contains(where: { $0 == pinnedID }),
+                   "hard-D pinned revision survives truncation")
+        } catch {
+            record(false, "hard-D pinned revision survives truncation")
+        }
+
+        // E. items[] and records[] cannot diverge (single canonical append).
+        do {
+            let (_, _, state) = try makeProject()
+            await state.beginTask(specFor("a.html"))
+            let rev = ArtifactRevisionID()
+            await state.setCurrentRevisions(["a.html": rev])
+            await state.observation("search")
+            await state.mutation("edit_file", path: "a.html", content: nil,
+                                 changed: true, revisionID: rev)
+            await state.validationSuccess("validate_file", isRealValidation: true,
+                                          path: "a.html", revisionID: rev)
+            await state.launchSuccess("open_file", path: "a.html", revisionID: rev)
+            await state.externalSuccess("tavily_search", server: "tavily",
+                                        operation: "tavily_search", urls: ["https://x.test/i.png"])
+            await state.failure("shell", message: "boom")
+            let snapshot = await state.taskSnapshot()
+            let journal = await state.journalRecords()
+            let countsOK = snapshot.evidence.count == journal.count &&
+                snapshot.evidenceRevisions.count == journal.count
+            let linkedOK = zip(snapshot.evidenceRevisions, journal).allSatisfy { revID, rec in
+                revID?.rawValue == rec.revisionID
+            }
+            func kindOf(_ item: TaskEvidence) -> String {
+                switch item {
+                case .observed: return "observed"
+                case .readBack: return "readBack"
+                case .mutated: return "mutated"
+                case .validated: return "validated"
+                case .launched: return "launched"
+                case .externalEffect: return "externalEffect"
+                case .toolFailed: return "toolFailed"
+                case .userReportedFailure: return "userReportedFailure"
+                }
+            }
+            func kindOfRecord(_ rec: EvidenceRecord) -> String {
+                switch rec.kind {
+                case .observed: return "observed"
+                case .readBack: return "readBack"
+                case .mutation: return "mutated"
+                case .validation, .test: return "validated"
+                case .launch: return "launched"
+                case .external: return "externalEffect"
+                case .diagnostic: return "toolFailed"
+                }
+            }
+            let projectionOK = zip(snapshot.evidence, journal).allSatisfy { item, rec in
+                kindOf(item) == kindOfRecord(rec) && item.path == rec.path
+            }
+            // persist/restore round-trip preserves 1:1
+            let store = RuntimePersistence(projectPath: "/tmp/slta-hardening-probe")
+            let persisted = PersistedRuntimeState(
+                schemaVersion: RuntimePersistence.schemaVersion,
+                projectID: "probe", projectPath: "/tmp/slta-hardening-probe",
+                savedAt: Date(), spec: snapshot.spec,
+                requirements: snapshot.requirements, records: journal,
+                itemRevisions: journal.map { $0.revisionID },
+                current: snapshot.artifactRevisions.mapValues { $0.rawValue },
+                lastFailure: nil,
+                artifacts: PersistedArtifactGraph(schemaVersion: 1, nodes: [])
+            )
+            store.save(persisted)
+            let roundTripped = store.load()
+            store.clear()
+            try? FileManager.default.removeItem(at: store.directory)
+            let rtOK = roundTripped?.records.count == journal.count
+            record(countsOK && linkedOK && projectionOK && (rtOK ?? false),
+                   "hard-E single evidence source of truth")
+        } catch {
+            record(false, "hard-E single evidence source of truth")
+        }
+
+        // F. race between base observation and edit -> recoverable conflict.
+        do {
+            let (dir, ws, _, registry) = try makeRegistryProject()
+            defer { cleanup(dir) }
+            let filler = String(repeating: "x", count: 20000)
+            let base = "AAA\n" + filler + "\nBBB\n"
+            let aResult = "A2\n" + filler + "\nBBB\n"
+            let bResult = "AAA\n" + filler + "\nB2\n"
+            var conflicts = 0
+            var unexpected = 0
+            var finals: [String] = []
+            for i in 0..<12 {
+                let file = "f\(i).html"
+                await registry.state.resetTask()
+                _ = try ws.writeFile(file, content: base)
+                let results = await withTaskGroup(of: String.self) { group in
+                    group.addTask {
+                        await registry.executeNormalized(
+                            NormalizedToolInvocation(
+                                name: "edit_file",
+                                arguments: ["path": file, "old": "AAA", "new": "A2"],
+                                source: .provider
+                            ),
+                            allowed: ["edit_file"]
+                        )
+                    }
+                    group.addTask {
+                        await registry.executeNormalized(
+                            NormalizedToolInvocation(
+                                name: "edit_file",
+                                arguments: ["path": file, "old": "BBB", "new": "B2"],
+                                source: .provider
+                            ),
+                            allowed: ["edit_file"]
+                        )
+                    }
+                    var collected: [String] = []
+                    for await r in group { collected.append(r) }
+                    return collected
+                }
+                // Conflict results must carry the recoverable retry mapping.
+                for r in results where r.contains("revision conflict") {
+                    conflicts += 1
+                    if !r.contains("\"retry\":true") { unexpected += 1 }
+                }
+                for r in results where r.contains("\"ok\":false") && !r.contains("revision conflict")
+                    && !r.contains("retry") {
+                    unexpected += 1
+                }
+                let disk = try String(contentsOf: dir.appendingPathComponent(file),
+                                      encoding: .utf8)
+                finals.append(disk)
+            }
+            // Disk always holds a complete result: a single winner, or a
+            // correct sequential merge when the loser observed fresh state.
+            // Torn or mixed content is never acceptable.
+            let merged = "A2\n" + filler + "\nB2\n"
+            let intact = finals.allSatisfy { $0 == aResult || $0 == bResult || $0 == merged }
+            // recoverable mapping: conflict is retryable, never a fatal failure
+            let snap = await registry.state.taskSnapshot()
+
+            record(conflicts >= 1 && unexpected == 0 && intact &&
+                   !snap.validation.lastToolFailed,
+                   "hard-F race becomes recoverable conflict")
+        } catch {
+            record(false, "hard-F race becomes recoverable conflict")
+        }
+
+        // G. writer-knows: EditEngine mutation qualifies, shell does not.
+        do {
+            let (_, _, state) = try makeProject()
+            await state.beginTask(specFor("a.html"))
+            let rev = ArtifactRevisionID()
+            await state.setCurrentRevisions(["a.html": rev])
+            await state.mutation("shell", path: "a.html", content: nil,
+                                 changed: true, revisionID: rev)
+            let afterShell = await state.taskSnapshot()
+            let shellGrantsObserve = !afterShell.missingRequirements
+                .contains(.observe(.path("a.html")))
+            await state.mutation("edit_file", path: "a.html", content: nil,
+                                 changed: true, revisionID: rev)
+            let afterEdit = await state.taskSnapshot()
+            let editGrantsObserve = !afterEdit.missingRequirements
+                .contains(.observe(.path("a.html")))
+            record(!shellGrantsObserve && editGrantsObserve,
+                   "hard-G writer-knows is EditEngine-only")
+        } catch {
+            record(false, "hard-G writer-knows is EditEngine-only")
+        }
+
+        return out
+    }
+}

@@ -307,6 +307,34 @@ final class Workspace: @unchecked Sendable {
         return true
     }
 
+    /// v0.29.1 TOCTOU guard: re-verify the expected base maximally close to
+    /// the atomic commit. Throws RECOVERABLE_CONFLICT (no mutation evidence,
+    /// no graph update) instead of overwriting an external change.
+    private func verifyUnchangedBase(
+        url: URL,
+        expectedContent: String?,
+        expectedExists: Bool,
+        path: String
+    ) throws {
+        let current: String? = try? String(contentsOf: url, encoding: .utf8)
+        if expectedExists {
+            guard let current else {
+                throw SLTAError.revisionConflict(
+                    "file disappeared under runtime for \(path); reread before mutating"
+                )
+            }
+            guard ArtifactHash.sha256(current) == ArtifactHash.sha256(expectedContent ?? "") else {
+                throw SLTAError.revisionConflict(
+                    "file changed under runtime for \(path); expected base no longer current"
+                )
+            }
+        } else if current != nil {
+            throw SLTAError.revisionConflict(
+                "file appeared under runtime for \(path); reread before creating"
+            )
+        }
+    }
+
     /// Deletion is an external change too: record it before throwing not-found.
     @discardableResult
     private func detectExternalDeletion(key: String) -> Bool {
@@ -463,6 +491,7 @@ final class Workspace: @unchecked Sendable {
         )
 
         do {
+            try verifyUnchangedBase(url: url, expectedContent: previousContent, expectedExists: exists, path: path)
             try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
 
@@ -531,6 +560,7 @@ final class Workspace: @unchecked Sendable {
         )
 
         do {
+            try verifyUnchangedBase(url: url, expectedContent: text, expectedExists: true, path: path)
             try Data(updated.utf8).write(to: url, options: .atomic)
 
             if let perms = existingPerms {
@@ -637,6 +667,7 @@ final class Workspace: @unchecked Sendable {
         )
 
         do {
+            try verifyUnchangedBase(url: url, expectedContent: text, expectedExists: true, path: path)
             try Data(updated.utf8).write(to: url, options: .atomic)
             let receipt = try editEngine.commit(prepared)
             taskCache.mutation(targetPath: key)
@@ -930,6 +961,28 @@ final class Workspace: @unchecked Sendable {
     }
 
     func latestEditReceipt(path: String) -> EditTransactionRef? { editEngine.latestReceipt(path: path) }
+
+    /// v0.29.1 retention closure: every revision ID still referenced by live
+    /// runtime structures. The graph prunes around this set, never through it.
+    func pinnedRevisionIDs(
+        journal: [EvidenceRecord],
+        current: [String: ArtifactRevisionID]
+    ) -> Set<ArtifactRevisionID> {
+        var out = Set(current.values)
+        for record in journal {
+            if let id = record.revisionID {
+                out.insert(ArtifactRevisionID(id))
+            }
+        }
+        for tx in editEngine.recentTransactions(limit: 2000) {
+            out.insert(tx.proposal.baseRevisionID)
+            out.insert(tx.proposal.proposedRevisionID)
+        }
+        for checkpoint in editEngine.checkpointHistory(limit: 500) {
+            out.insert(checkpoint.revisionID)
+        }
+        return out
+    }
     func editHistoryText(limit: Int = 20) -> String { editEngine.transactionHistoryText(limit: limit) }
     func editDiffText(transactionPrefix: String? = nil) throws -> String { try editEngine.diffText(prefix: transactionPrefix) }
     func revisionHistoryText(path: String, limit: Int = 30) -> String { editEngine.revisionHistoryText(path: path, limit: limit) }

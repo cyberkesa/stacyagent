@@ -12,6 +12,7 @@ public enum SLTAError: Error, LocalizedError, CustomStringConvertible, Sendable 
     case toolFailed(tool: String, underlying: String)
     case shellFailed(status: Int32, output: String)
     case executableMissing(String)
+    case revisionConflict(String)
     case mcp(String)
     case model(String)
     case persistence(String)
@@ -29,6 +30,7 @@ public enum SLTAError: Error, LocalizedError, CustomStringConvertible, Sendable 
         case .toolFailed(let t, let u): return "\(t) failed: \(u)"
         case .shellFailed(let st, let o): return "shell exit=\(st)\n\(o)"
         case .executableMissing(let s): return "\(s) is not available"
+        case .revisionConflict(let s): return "revision conflict (recoverable): \(s)"
         case .mcp(let s): return "MCP: \(s)"
         case .model(let s): return "model: \(s)"
         case .persistence(let s): return "persistence: \(s)"
