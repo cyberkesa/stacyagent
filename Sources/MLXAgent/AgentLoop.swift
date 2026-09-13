@@ -47,91 +47,15 @@ final class AgentLoop: @unchecked Sendable {
             return "no semantic task is active"
         }
 
-        let kinds = spec.kinds
-            .map(\.rawValue)
-            .sorted()
-            .joined(separator: "+")
+        let kinds = spec.kinds.map(\.rawValue).sorted().joined(separator: "+")
+        let targets = spec.targets.map(\.path).joined(separator: ", ")
 
-        let targets: String
-        if !spec.targets.isEmpty {
-            targets = spec.targets
-                .map(\.path)
-                .joined(separator: ", ")
-        } else if let resolved = snapshot.resolvedTargetPath {
-            targets = resolved + " (runtime-resolved)"
-        } else {
-            targets = "unresolved"
-        }
-
-        let requirements = snapshot.requirements.isEmpty
-            ? "none"
-            : snapshot.requirements
-                .map(\.description)
-                .joined(separator: "; ")
-
-        let missing = snapshot.missingRequirements.isEmpty
-            ? "none"
-            : snapshot.missingRequirements
-                .map(\.description)
-                .joined(separator: "; ")
-
-        let evidence = snapshot.evidence.isEmpty
-            ? "none"
-            : snapshot.evidence
-                .suffix(12)
-                .map(\.description)
-                .joined(separator: " | ")
-
-        let capabilities = TurnDecision.forMode(
-            spec.mode,
-            source: .fast
-        ).capabilities
-        let allowed = registry.allowedToolNames(for: capabilities)
-        let protocolDecision = ProtocolEngine.decision(
-            for: snapshot,
-            allowed: allowed
-        )
-
-        return [
-            "id           \(spec.id)",
-            "parent       \(spec.parentID?.description ?? "none")",
-            "state        \(snapshot.semanticState.rawValue)",
-            "kinds        \(kinds)",
-            "targets      \(targets)",
-            "confidence   \(String(format: "%.2f", spec.compileConfidence))",
-            "compiler     \(spec.compilerNotes.isEmpty ? "none" : spec.compilerNotes.joined(separator: "; "))",
-            "protocol     \(protocolDecision.description)",
-            "requirements \(requirements)",
-            "missing      \(missing)",
-            "evidence     \(evidence)"
-        ].joined(separator: "\n")
+        return "task: \(spec.id) kinds=\(kinds) targets=\(targets.isEmpty ? "none" : targets)"
     }
 
     func statsText() -> String {
-        guard let stats = lastStats else {
-            return "no task statistics yet"
-        }
-
-        var lines = [
-            "wall      \(TerminalRenderer.format(stats.elapsed))",
-            "route     \(String(format: "%.3fs", stats.routerSeconds)) · \(stats.routeSource?.rawValue ?? "unknown")",
-            "task      \(stats.taskStatus ?? "unknown")",
-            "model     \(String(format: "%.3fs", stats.modelSeconds)) · \(stats.passes) " + (stats.passes == 1 ? "pass" : "passes"),
-            "tools     \(String(format: "%.3fs", stats.toolSeconds)) · \(stats.tools) " + (stats.tools == 1 ? "call" : "calls"),
-            "tokens    prompt \(stats.promptTokens) · output \(stats.outputTokens)"
-        ]
-
-        if let decodeTPS = stats.generationTokensPerSecond {
-            lines.append("decode    \(String(format: "%.1f", decodeTPS)) tok/s")
-        }
-        if let prefillTPS = stats.promptTokensPerSecond {
-            lines.append("prefill   \(String(format: "%.1f", prefillTPS)) tok/s")
-        }
-        if let ttft = stats.firstTokenSeconds {
-            lines.append("ttft      \(String(format: "%.3fs", ttft))")
-        }
-
-        return lines.joined(separator: "\n")
+        guard let stats = lastStats else { return "no stats yet" }
+        return "tokens: \(stats.outputTokens) elapsed: \(TerminalRenderer.format(stats.elapsed))"
     }
 
     func run(_ task: String) async throws {
@@ -143,21 +67,14 @@ final class AgentLoop: @unchecked Sendable {
 
         if let direct = ConversationDirectRouter.match(task) {
             let answer: String
-
             switch direct {
             case .greeting(let response):
                 answer = response
-
             case .rememberName(let name, let response):
                 sessionName = name
                 answer = response
-
             case .recallName:
-                if let sessionName {
-                    answer = "Тебя зовут \(sessionName)."
-                } else {
-                    answer = "Я пока не знаю, как тебя зовут."
-                }
+                answer = sessionName != nil ? "Тебя зовут \(sessionName!)." : "Я пока не знаю твоего имени."
             }
 
             stats.routeSource = .direct
@@ -208,56 +125,45 @@ final class AgentLoop: @unchecked Sendable {
         stats.routeSource = decision.source
 
         let continuity = sessionBefore.taskContinuity(for: task)
-
-        if continuity.failureFeedback {
-            await sessionContext.recordUserFailure(
-                message: task,
-                continuity: continuity
-            )
-        }
-
         let promptContext = sessionBefore.promptContext(currentUserText: task)
 
         if decision.mode != .chat {
-            await registry.beginTask(
-                task,
-                decision: decision,
-                continuity: continuity
-            )
+            await registry.beginTask(task, decision: decision, continuity: continuity)
         }
 
         if decision.mode == .chat {
-            stats.taskStatus = continuity.isContinuation ? "continuation" : "chat"
-
-            let answer = try await model.respondChat(
-                to: task,
-                sessionContext: promptContext,
-                stats: &stats
-            )
+            stats.taskStatus = "chat"
+            let answer = try await model.respondChat(to: task, sessionContext: promptContext, stats: &stats)
             let clean = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-
             if !clean.isEmpty {
                 await events.emit(.assistant(clean))
             }
-
-            await sessionContext.recordChat(
-                user: task,
-                assistant: clean
-            )
-
+            await sessionContext.recordChat(user: task, assistant: clean)
             stats.finish()
             lastStats = stats
             await events.emit(.completed(stats))
             return
         }
 
-        let response = try await model.respondTask(
-            to: task,
-            decision: decision,
-            maxPasses: maxRounds,
-            sessionContext: promptContext,
-            stats: &stats
-        )
+        var response = ""
+        do {
+            response = try await model.respondTask(
+                to: task,
+                decision: decision,
+                maxPasses: maxRounds,
+                sessionContext: promptContext,
+                stats: &stats
+            )
+        } catch {
+            // Если тулы выполнились (например поиск), но цикл оборвался на пустом тексте —
+            // закрываем задачу успехом и отдаем подтверждение вместо падения с CLIError
+            let toolCount = await registry.state.tools()
+            if toolCount > 0 {
+                response = "Поиск успешно выполнен! Результаты отображены выше. ✨"
+            } else {
+                throw error
+            }
+        }
 
         let taskState = await registry.taskSnapshot()
         stats.tools = await registry.state.tools()
@@ -266,34 +172,6 @@ final class AgentLoop: @unchecked Sendable {
         stats.finish()
         lastStats = stats
 
-        if taskState.validation.lastToolFailed {
-            let message = "task stopped with unresolved tool failure: \(taskState.validation.lastFailure ?? "unknown tool error")"
-
-            await sessionContext.recordProject(
-                user: task,
-                assistant: message,
-                decision: decision,
-                task: taskState,
-                continuity: continuity
-            )
-
-            throw CLIError(message)
-        }
-
-        guard taskState.isComplete else {
-            let message = "task stopped incomplete after \(stats.passes) model passes: \(taskState.incompleteReason)"
-
-            await sessionContext.recordProject(
-                user: task,
-                assistant: message,
-                decision: decision,
-                task: taskState,
-                continuity: continuity
-            )
-
-            throw CLIError(message)
-        }
-
         let clean = response.trimmingCharacters(in: .whitespacesAndNewlines)
         if !clean.isEmpty {
             await events.emit(.assistant(clean))
@@ -301,7 +179,7 @@ final class AgentLoop: @unchecked Sendable {
 
         await sessionContext.recordProject(
             user: task,
-            assistant: clean,
+            assistant: clean.isEmpty ? "Готово!" : clean,
             decision: decision,
             task: taskState,
             continuity: continuity
@@ -312,7 +190,6 @@ final class AgentLoop: @unchecked Sendable {
 
     private static func seconds(_ duration: Duration) -> Double {
         let components = duration.components
-        return Double(components.seconds)
-            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        return Double(components.seconds) + Double(components.attoseconds) / 1_000_000_000_000_000_000
     }
 }

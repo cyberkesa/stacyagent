@@ -12,13 +12,13 @@ enum StacyTheme {
     static let cardBorderHover = Color(red: 0.98, green: 0.60, blue: 0.72)
     static let primaryPink = Color(red: 0.98, green: 0.38, blue: 0.58)
     static let softPink = Color(red: 1.0, green: 0.93, blue: 0.96)
-    static let userBubbleBg = Color(red: 1.0, green: 0.94, blue: 0.96)
+    static let userBubbleBg = Color(red: 1.0, green: 0.945, blue: 0.965)
     static let textMain = Color(red: 0.20, green: 0.16, blue: 0.19)
     static let textMuted = Color(red: 0.56, green: 0.49, blue: 0.53)
     static let badgeSuccess = Color(red: 0.20, green: 0.78, blue: 0.45)
 }
 
-// MARK: - Mascot View (Stacy Kitty 🎀)
+// MARK: - Mascot View
 struct StacyMascotView: View {
     var size: CGFloat = 36
     var isThinking: Bool = false
@@ -77,15 +77,11 @@ struct StacyMascotView: View {
         .offset(y: bounce ? -3 : 0)
         .onAppear {
             if isThinking {
-                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                    bounce = true
-                }
+                withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { bounce = true }
             }
         }
         .onChange(of: isThinking) { _, thinking in
-            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) {
-                bounce = thinking
-            }
+            withAnimation(.easeInOut(duration: 0.6).repeatForever(autoreverses: true)) { bounce = thinking }
         }
     }
 }
@@ -155,6 +151,11 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
     @Published var serverNames: [String] = []
     @Published var isSidebarVisible: Bool = true
 
+    // Live Thinking & Token Telemetry
+    @Published var liveThinkingLabel: String? = nil
+    @Published var liveThinkingSeconds: Double = 0
+    @Published var liveThinkingTokens: Int = 0
+
     private var agent: AgentLoop?
     private var taskHandle: Task<Void, Never>?
 
@@ -166,9 +167,7 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
     }
 
     nonisolated func emit(_ event: AgentEvent) async {
-        await MainActor.run {
-            self.handleEvent(event)
-        }
+        await MainActor.run { self.handleEvent(event) }
     }
 
     private func handleEvent(_ event: AgentEvent) {
@@ -185,8 +184,24 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
             self.activeTask = task
             self.ensureAssistantBubble()
 
+        case .generationStarted(let label):
+            self.ensureAssistantBubble()
+            self.liveThinkingLabel = label
+            self.liveThinkingSeconds = 0
+            self.liveThinkingTokens = 0
+
+        case .generationProgress(let label, let seconds, let chunks):
+            self.ensureAssistantBubble()
+            self.liveThinkingLabel = label
+            self.liveThinkingSeconds = seconds
+            self.liveThinkingTokens = chunks
+
+        case .generationFinished:
+            self.liveThinkingLabel = nil
+
         case .toolStarted(let name):
             self.activeToolName = name
+            self.liveThinkingLabel = nil
             self.ensureAssistantBubble()
             if var last = self.messages.last, last.role == .assistant {
                 last.toolCalls.append(UIToolCall(name: name, detail: "", isRunning: true))
@@ -210,6 +225,7 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
             self.messages[self.messages.count - 1] = last
 
         case .assistant(let chunk):
+            self.liveThinkingLabel = nil
             self.ensureAssistantBubble()
             guard var last = self.messages.last, last.role == .assistant else { return }
             if last.text.isEmpty {
@@ -227,6 +243,7 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
             self.isRunning = false
             self.activeTask = nil
             self.activeToolName = nil
+            self.liveThinkingLabel = nil
 
             guard var last = self.messages.last, last.role == .assistant else { return }
             var parts: [String] = []
@@ -270,7 +287,6 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
                 await MainActor.run {
                     self.ensureAssistantBubble()
                     if var last = self.messages.last, last.role == .assistant {
-                        // Если тулы выполнились успешно, но цикл оборвался семантически — не пугаем пользователя
                         let hasSuccessfulTools = last.toolCalls.contains { $0.isSuccess == true }
                         if !hasSuccessfulTools {
                             last.text += "\n❌ Ошибка: \(error.localizedDescription)"
@@ -279,6 +295,7 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
                     }
                     self.isRunning = false
                     self.activeTask = nil
+                    self.liveThinkingLabel = nil
                 }
             }
         }
@@ -289,6 +306,7 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
         isRunning = false
         activeTask = nil
         activeToolName = nil
+        liveThinkingLabel = nil
     }
 
     func clearHistory() {
@@ -325,9 +343,9 @@ struct SLTAMainWindowView: View {
 
     private var inputHeight: CGFloat {
         let lines = vm.inputText.components(separatedBy: "\n").count
-        let charLines = vm.inputText.count / 70
+        let charLines = vm.inputText.count / 75
         let total = max(1, lines + charLines)
-        return min(160, max(40, CGFloat(total * 22 + 16)))
+        return min(160, max(38, CGFloat(total * 22 + 16)))
     }
 
     var body: some View {
@@ -338,7 +356,7 @@ struct SLTAMainWindowView: View {
             SidebarView(vm: vm)
         } detail: {
             VStack(spacing: 0) {
-                // Header Toolbar
+                // Header
                 HStack(spacing: 12) {
                     Button(action: { withAnimation(.spring(response: 0.3)) { vm.isSidebarVisible.toggle() } }) {
                         Image(systemName: "sidebar.left")
@@ -391,7 +409,7 @@ struct SLTAMainWindowView: View {
 
                 Divider().overlay(StacyTheme.cardBorder)
 
-                // Message Stream: Адаптивный по ширине контейнер
+                // Message Stream
                 ScrollViewReader { proxy in
                     ScrollView {
                         VStack(spacing: 0) {
@@ -403,6 +421,9 @@ struct SLTAMainWindowView: View {
                                         ChatBubbleView(
                                             msg: msg,
                                             isLastAndRunning: vm.isRunning && msg.id == vm.messages.last?.id,
+                                            thinkingLabel: vm.liveThinkingLabel,
+                                            thinkingSeconds: vm.liveThinkingSeconds,
+                                            thinkingTokens: vm.liveThinkingTokens,
                                             onCopy: { text in vm.copyToClipboard(text) }
                                         )
                                     }
@@ -410,7 +431,7 @@ struct SLTAMainWindowView: View {
                                 .padding(.vertical, 20)
                             }
                         }
-                        .frame(maxWidth: 880) // Оптимальная максимальная ширина
+                        .frame(maxWidth: 880)
                         .frame(maxWidth: .infinity)
                         .padding(.horizontal, 20)
                     }
@@ -423,15 +444,14 @@ struct SLTAMainWindowView: View {
 
                 Divider().overlay(StacyTheme.cardBorder)
 
-                // Адаптивное поле ввода с кнопками «Вставить» и «Отправить»
+                // Input Box
                 VStack(spacing: 6) {
                     HStack(alignment: .bottom, spacing: 8) {
-                        // Кнопка быстрой вставки из буфера обмена
                         Button(action: vm.pasteFromClipboard) {
                             Image(systemName: "doc.on.clipboard")
                                 .font(.system(size: 13))
                                 .foregroundStyle(StacyTheme.primaryPink)
-                                .frame(width: 32, height: 32)
+                                .frame(width: 34, height: 34)
                                 .background(StacyTheme.softPink)
                                 .clipShape(Circle())
                         }
@@ -444,7 +464,7 @@ struct SLTAMainWindowView: View {
                             .scrollContentBackground(.hidden)
                             .frame(height: inputHeight)
                             .padding(.horizontal, 10)
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 7)
                             .background(Color.white)
                             .clipShape(RoundedRectangle(cornerRadius: 12))
                             .overlay(
@@ -506,9 +526,7 @@ struct SLTAMainWindowView: View {
         }
         .preferredColorScheme(.light)
         .frame(minWidth: 800, minHeight: 560)
-        .onAppear {
-            isInputFocused = true
-        }
+        .onAppear { isInputFocused = true }
     }
 }
 
@@ -609,10 +627,13 @@ struct WelcomeEmptyView: View {
     }
 }
 
-// MARK: - Responsive Chat Bubble View
+// MARK: - Chat Bubble View with Live Thinking Stream
 struct ChatBubbleView: View {
     let msg: UIMessage
     var isLastAndRunning: Bool = false
+    var thinkingLabel: String? = nil
+    var thinkingSeconds: Double = 0
+    var thinkingTokens: Int = 0
     var onCopy: (String) -> Void
 
     @State private var isHovered = false
@@ -623,11 +644,11 @@ struct ChatBubbleView: View {
             if msg.role == .assistant {
                 StacyMascotView(size: 32, isThinking: isLastAndRunning)
             } else {
-                Spacer(minLength: 60) // Сдвигает сообщение пользователя вправо
+                Spacer(minLength: 50)
             }
 
             VStack(alignment: msg.role == .user ? .trailing : .leading, spacing: 6) {
-                // Шапка сообщения
+                // Header
                 HStack(spacing: 6) {
                     if msg.role == .assistant {
                         Text("Stacy Agent")
@@ -639,9 +660,7 @@ struct ChatBubbleView: View {
                         Button(action: {
                             onCopy(msg.text)
                             justCopied = true
-                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                                justCopied = false
-                            }
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { justCopied = false }
                         }) {
                             HStack(spacing: 3) {
                                 Image(systemName: justCopied ? "checkmark" : "doc.on.doc")
@@ -668,7 +687,7 @@ struct ChatBubbleView: View {
                     }
                 }
 
-                // Карточки вызовов инструментов
+                // Tool Calls
                 if !msg.toolCalls.isEmpty {
                     VStack(alignment: .leading, spacing: 5) {
                         ForEach(msg.toolCalls) { tool in
@@ -678,9 +697,47 @@ struct ChatBubbleView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
-                // Текст сообщения
+                // ЖИВОЙ ИНСПЕКТОР РАССУЖДЕНИЙ (Live Thinking Inspector)
+                if isLastAndRunning && msg.role == .assistant {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.mini).tint(StacyTheme.primaryPink)
+                        
+                        let phaseText = (thinkingLabel?.contains("working") == true)
+                            ? "Пишу код в файл..."
+                            : "Анализирую задачу и планирую код..."
+                        
+                        Text(phaseText)
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(StacyTheme.textMain)
+
+                        Spacer()
+
+                        HStack(spacing: 5) {
+                            Image(systemName: "stopwatch")
+                                .font(.system(size: 9.5))
+                            Text(String(format: "%.1fs", thinkingSeconds))
+                            if thinkingTokens > 0 {
+                                Text("• \(thinkingTokens) tok")
+                            }
+                        }
+                        .font(.system(size: 10.5, design: .monospaced))
+                        .foregroundStyle(StacyTheme.textMuted)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                        .background(StacyTheme.softPink)
+                        .clipShape(Capsule())
+                    }
+                    .padding(9)
+                    .background(Color(red: 0.995, green: 0.965, blue: 0.985))
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                    .overlay(RoundedRectangle(cornerRadius: 10).stroke(StacyTheme.cardBorder, lineWidth: 1))
+                }
+
+                // Text
                 if !msg.text.isEmpty {
-                    StructuredText(markdown: msg.text)
+                    Text(msg.text)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(StacyTheme.textMain)
                         .textSelection(.enabled)
                         .lineSpacing(3)
                         .padding(msg.role == .user ? 10 : 0)
@@ -690,16 +747,9 @@ struct ChatBubbleView: View {
                             RoundedRectangle(cornerRadius: 12)
                                 .stroke(msg.role == .user ? StacyTheme.primaryPink.opacity(0.3) : Color.clear, lineWidth: 1)
                         )
-                } else if msg.role == .assistant && isLastAndRunning && msg.toolCalls.isEmpty {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.mini).tint(StacyTheme.primaryPink)
-                        Text("Stacy Agent думает... 🐾")
-                            .font(.system(size: 12))
-                            .foregroundStyle(StacyTheme.textMuted)
-                    }
                 }
 
-                // Картинки
+                // Images
                 if !msg.imageURLs.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 12) {
@@ -720,9 +770,7 @@ struct ChatBubbleView: View {
                                             .clipShape(RoundedRectangle(cornerRadius: 10))
                                             .overlay(RoundedRectangle(cornerRadius: 10).stroke(StacyTheme.cardBorder, lineWidth: 1.2))
                                             .shadow(color: StacyTheme.primaryPink.opacity(0.1), radius: 5, y: 2)
-                                            .onTapGesture {
-                                                NSWorkspace.shared.open(url)
-                                            }
+                                            .onTapGesture { NSWorkspace.shared.open(url) }
                                     case .failure:
                                         HStack {
                                             Image(systemName: "photo")
@@ -741,7 +789,7 @@ struct ChatBubbleView: View {
                     }
                 }
 
-                // Статистика токенов
+                // Stats
                 if let stats = msg.tokenStats {
                     HStack(spacing: 6) {
                         Image(systemName: "bolt.fill")

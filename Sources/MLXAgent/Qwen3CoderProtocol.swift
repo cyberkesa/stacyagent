@@ -13,87 +13,136 @@ enum Qwen3CoderParseResult: Sendable {
 
 enum Qwen3CoderProtocol {
     static func analyze(_ text: String) -> Qwen3CoderParseResult {
-        let hasOpen =
-            text.contains("<tool_call>") ||
-            text.contains("<function=")
+        var invocations: [Qwen3CoderInvocation] = []
 
-        guard hasOpen else {
-            if let json = parseJSONInvocation(text) {
-                return .complete([json])
+        // 1. Стандартный формат Qwen: <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+        let toolCallInvocations = parseToolCallBlocks(text)
+        if !toolCallInvocations.isEmpty {
+            invocations.append(contentsOf: toolCallInvocations)
+        }
+
+        // 2. XML формат: <function=name><parameter=key>value</parameter></function>
+        let functionInvocations = parseCompleteFunctions(text)
+        if !functionInvocations.isEmpty {
+            invocations.append(contentsOf: functionInvocations)
+        }
+
+        // 3. Восстановление XML с закрытыми параметрами
+        if invocations.isEmpty, let recovered = recoverClosedParametersFunction(text) {
+            invocations.append(recovered)
+        }
+
+        // 4. Поиск чистых JSON блоков
+        if invocations.isEmpty {
+            let jsonInvocations = parseAllJSONInvocations(text)
+            if !jsonInvocations.isEmpty {
+                invocations.append(contentsOf: jsonInvocations)
             }
-            return .none
         }
 
-        // Parse complete function blocks FIRST. Qwen/MLX may end generation after
-        // a semantically complete function call without emitting the outer
-        // </tool_call> wrapper. Rejecting that valid inner call caused repeated
-        // "incomplete tool-call" passes in v0.21.2.
-        let completeFunctions = parseCompleteFunctions(text)
-        if !completeFunctions.isEmpty {
-            return .complete(completeFunctions)
+        // 5. SMART FALLBACK: Если модель вывела код в markdown блоке ```lang ... ``` вместо тега
+        if invocations.isEmpty, let codeBlockInv = extractCodeBlockInvocation(text) {
+            invocations.append(codeBlockInv)
         }
 
-        // A second safe recovery path: function closing markup may be missing,
-        // while every parameter is already completely closed. In that case the
-        // invocation is structurally recoverable and ToolRegistry still performs
-        // normal schema validation before execution.
-        if let recovered = recoverClosedParametersFunction(text) {
-            return .complete([recovered])
+        if !invocations.isEmpty {
+            return .complete(invocations)
         }
 
-        if let json = parseJSONInvocation(text) {
-            return .complete([json])
+        if (text.contains("<tool_call>") && !text.contains("</tool_call>")) ||
+           (text.contains("<function=") && !text.contains("</function>")) {
+            return .incomplete(String(text.suffix(2_000)))
         }
 
-        // Never execute genuinely truncated parameter content.
-        return .incomplete(String(text.suffix(2_000)))
+        return .none
     }
 
-    private static func parseCompleteFunctions(
-        _ text: String
-    ) -> [Qwen3CoderInvocation] {
+    // MARK: - Экранирование переносов строк внутри JSON-строк
+    // Исправляет падение JSONSerialization (ошибка 3840) на многострочном HTML/коде
+    private static func sanitizeJSONString(_ input: String) -> String {
+        var output = ""
+        output.reserveCapacity(input.count + 64)
+        var inString = false
+        var isEscaped = false
+
+        for char in input {
+            if isEscaped {
+                output.append(char)
+                isEscaped = false
+                continue
+            }
+            if char == "\\" {
+                output.append(char)
+                isEscaped = true
+                continue
+            }
+            if char == "\"" {
+                inString.toggle()
+                output.append(char)
+                continue
+            }
+            if inString {
+                if char == "\n" {
+                    output.append("\\n")
+                    continue
+                }
+                if char == "\r" {
+                    output.append("\\r")
+                    continue
+                }
+                if char == "\t" {
+                    output.append("\\t")
+                    continue
+                }
+            }
+            output.append(char)
+        }
+        return output
+    }
+
+    // MARK: - Парсинг блоков <tool_call>...</tool_call>
+    private static func parseToolCallBlocks(_ text: String) -> [Qwen3CoderInvocation] {
+        var results: [Qwen3CoderInvocation] = []
+        var cursor = text.startIndex
+
+        while let start = text.range(of: "<tool_call>", range: cursor..<text.endIndex) {
+            let searchEnd = text.range(of: "</tool_call>", range: start.upperBound..<text.endIndex)?.lowerBound ?? text.endIndex
+            let block = String(text[start.upperBound..<searchEnd]).trimmingCharacters(in: .whitespacesAndNewlines)
+
+            if let inv = parseSingleJSONInvocation(block) {
+                results.append(inv)
+            } else {
+                let inner = parseAllJSONInvocations(block)
+                results.append(contentsOf: inner)
+            }
+
+            if searchEnd == text.endIndex { break }
+            cursor = text.index(searchEnd, offsetBy: "</tool_call>".count)
+        }
+
+        return results
+    }
+
+    // MARK: - Парсинг XML <function=...>
+    private static func parseCompleteFunctions(_ text: String) -> [Qwen3CoderInvocation] {
         var invocations: [Qwen3CoderInvocation] = []
         var cursor = text.startIndex
 
-        while let functionOpen = text.range(
-                  of: "<function=",
-                  range: cursor..<text.endIndex
-              ),
-              let nameEnd = text[
-                  functionOpen.upperBound...
-              ].firstIndex(of: ">"),
-              let functionClose = text.range(
-                  of: "</function>",
-                  range: nameEnd..<text.endIndex
-              ) {
+        while let functionOpen = text.range(of: "<function=", range: cursor..<text.endIndex),
+              let nameEnd = text[functionOpen.upperBound...].firstIndex(of: ">"),
+              let functionClose = text.range(of: "</function>", range: nameEnd..<text.endIndex) {
 
-            let name = text[
-                functionOpen.upperBound..<nameEnd
-            ].trimmingCharacters(
-                in: .whitespacesAndNewlines
-            )
-
+            let name = text[functionOpen.upperBound..<nameEnd].trimmingCharacters(in: .whitespacesAndNewlines)
             let bodyStart = text.index(after: nameEnd)
-            let body = String(
-                text[
-                    bodyStart..<functionClose.lowerBound
-                ]
-            )
+            let body = String(text[bodyStart..<functionClose.lowerBound])
 
             var args = parseXMLParameters(body)
-
-            if args.isEmpty,
-               let object = parseJSONObject(body) {
+            if args.isEmpty, let object = parseFirstJSONObject(body) {
                 args = stringArguments(object)
             }
 
             if !name.isEmpty {
-                invocations.append(
-                    .init(
-                        name: name,
-                        arguments: args
-                    )
-                )
+                invocations.append(.init(name: name, arguments: args))
             }
 
             cursor = functionClose.upperBound
@@ -102,101 +151,37 @@ enum Qwen3CoderProtocol {
         return invocations
     }
 
-    private static func recoverClosedParametersFunction(
-        _ text: String
-    ) -> Qwen3CoderInvocation? {
-        guard let functionOpen = text.range(
-                  of: "<function="
-              ),
-              let nameEnd = text[
-                  functionOpen.upperBound...
-              ].firstIndex(of: ">") else {
+    private static func recoverClosedParametersFunction(_ text: String) -> Qwen3CoderInvocation? {
+        guard let functionOpen = text.range(of: "<function="),
+              let nameEnd = text[functionOpen.upperBound...].firstIndex(of: ">") else {
             return nil
         }
 
-        let name = text[
-            functionOpen.upperBound..<nameEnd
-        ].trimmingCharacters(
-            in: .whitespacesAndNewlines
-        )
-
-        guard !name.isEmpty else {
-            return nil
-        }
+        let name = text[functionOpen.upperBound..<nameEnd].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { return nil }
 
         let bodyStart = text.index(after: nameEnd)
         var bodyEnd = text.endIndex
-
-        if let toolClose = text.range(
-            of: "</tool_call>",
-            range: bodyStart..<text.endIndex
-        ) {
+        if let toolClose = text.range(of: "</tool_call>", range: bodyStart..<text.endIndex) {
             bodyEnd = toolClose.lowerBound
         }
 
         let body = String(text[bodyStart..<bodyEnd])
-
-        let normalizedBody = body.lowercased()
-        let openCount =
-            normalizedBody.components(
-                separatedBy: "<parameter="
-            ).count - 1
-
-        let alternateOpenCount =
-            normalizedBody.components(
-                separatedBy: "<parameter name=\""
-            ).count - 1
-
-        let closeCount =
-            normalizedBody.components(
-                separatedBy: "</parameter>"
-            ).count - 1
-
-        let expectedOpenCount =
-            max(openCount, alternateOpenCount)
-
-        guard expectedOpenCount > 0,
-              expectedOpenCount == closeCount else {
-            return nil
-        }
-
         let args = parseXMLParameters(body)
-        guard !args.isEmpty else {
-            return nil
-        }
+        guard !args.isEmpty else { return nil }
 
-        return .init(
-            name: name,
-            arguments: args
-        )
-    }
-
-    static func removingToolMarkup(from text: String) -> String {
-        var output = text
-        while let start = output.range(of: "<tool_call>"),
-              let end = output.range(of: "</tool_call>", range: start.upperBound..<output.endIndex) {
-            output.removeSubrange(start.lowerBound..<end.upperBound)
-        }
-        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        return .init(name: name, arguments: args)
     }
 
     private static func parseXMLParameters(_ body: String) -> [String: String] {
         var result: [String: String] = [:]
         var cursor = body.startIndex
 
-        while let start = body.range(
-                  of: "<parameter=",
-                  options: [.caseInsensitive],
-                  range: cursor..<body.endIndex
-              ),
+        while let start = body.range(of: "<parameter=", options: [.caseInsensitive], range: cursor..<body.endIndex),
               let keyEnd = body[start.upperBound...].firstIndex(of: ">") {
             let key = body[start.upperBound..<keyEnd].trimmingCharacters(in: .whitespacesAndNewlines)
             let valueStart = body.index(after: keyEnd)
-            guard let close = body.range(
-                of: "</parameter>",
-                options: [.caseInsensitive],
-                range: valueStart..<body.endIndex
-            ) else {
+            guard let close = body.range(of: "</parameter>", options: [.caseInsensitive], range: valueStart..<body.endIndex) else {
                 break
             }
             var value = String(body[valueStart..<close.lowerBound])
@@ -206,25 +191,15 @@ enum Qwen3CoderProtocol {
             cursor = close.upperBound
         }
 
-        // Alternate XML spelling: <parameter name="path">...</parameter>
         if result.isEmpty {
             cursor = body.startIndex
-            while let start = body.range(
-                      of: "<parameter name=\"",
-                      options: [.caseInsensitive],
-                      range: cursor..<body.endIndex
-                  ),
+            while let start = body.range(of: "<parameter name=\"", options: [.caseInsensitive], range: cursor..<body.endIndex),
                   let quoteEnd = body[start.upperBound...].firstIndex(of: "\""),
                   let tagEnd = body[quoteEnd...].firstIndex(of: ">") {
                 let key = String(body[start.upperBound..<quoteEnd])
                 let valueStart = body.index(after: tagEnd)
-                guard let close = body.range(
-                    of: "</parameter>",
-                    options: [.caseInsensitive],
-                    range: valueStart..<body.endIndex
-                ) else { break }
-                result[key] = String(body[valueStart..<close.lowerBound])
-                    .trimmingCharacters(in: .newlines)
+                guard let close = body.range(of: "</parameter>", options: [.caseInsensitive], range: valueStart..<body.endIndex) else { break }
+                result[key] = String(body[valueStart..<close.lowerBound]).trimmingCharacters(in: .newlines)
                 cursor = close.upperBound
             }
         }
@@ -232,27 +207,79 @@ enum Qwen3CoderProtocol {
         return result
     }
 
-    private static func parseJSONInvocation(_ text: String) -> Qwen3CoderInvocation? {
-        guard let object = parseJSONObject(text) else { return nil }
+    // MARK: - Парсинг JSON
+    private static func parseAllJSONInvocations(_ text: String) -> [Qwen3CoderInvocation] {
+        var results: [Qwen3CoderInvocation] = []
+        var searchRange = text.startIndex..<text.endIndex
+
+        while let open = text[searchRange].firstIndex(of: "{") {
+            var depth = 0
+            var inString = false
+            var escape = false
+            var closeIndex: String.Index? = nil
+
+            for idx in text[open..<text.endIndex].indices {
+                let char = text[idx]
+                if escape { escape = false; continue }
+                if char == "\\" { escape = true; continue }
+                if char == "\"" { inString.toggle(); continue }
+                if !inString {
+                    if char == "{" { depth += 1 }
+                    else if char == "}" {
+                        depth -= 1
+                        if depth == 0 {
+                            closeIndex = idx
+                            break
+                        }
+                    }
+                }
+            }
+
+            guard let close = closeIndex else { break }
+            let candidate = String(text[open...close])
+
+            if let inv = parseSingleJSONInvocation(candidate) {
+                results.append(inv)
+            }
+
+            let nextStart = text.index(after: close)
+            if nextStart >= text.endIndex { break }
+            searchRange = nextStart..<text.endIndex
+        }
+
+        return results
+    }
+
+    private static func parseSingleJSONInvocation(_ jsonString: String) -> Qwen3CoderInvocation? {
+        let clean = jsonString.trimmingCharacters(in: .whitespacesAndNewlines)
+        let sanitized = sanitizeJSONString(clean)
+
+        guard let data = sanitized.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return nil
+        }
 
         if let name = object["name"] as? String {
             let args = object["arguments"] as? [String: Any] ?? object["parameters"] as? [String: Any] ?? [:]
             return .init(name: name, arguments: stringArguments(args))
         }
+
         if let function = object["function"] as? [String: Any],
            let name = function["name"] as? String {
             let args = function["arguments"] as? [String: Any] ?? [:]
             return .init(name: name, arguments: stringArguments(args))
         }
+
         return nil
     }
 
-    private static func parseJSONObject(_ text: String) -> [String: Any]? {
+    private static func parseFirstJSONObject(_ text: String) -> [String: Any]? {
         guard let open = text.firstIndex(of: "{"),
               let close = text.lastIndex(of: "}"),
               open <= close else { return nil }
         let json = String(text[open...close])
-        guard let data = json.data(using: .utf8) else { return nil }
+        let sanitized = sanitizeJSONString(json)
+        guard let data = sanitized.data(using: .utf8) else { return nil }
         return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
     }
 
@@ -270,5 +297,57 @@ enum Qwen3CoderProtocol {
             }
         }
         return result
+    }
+
+    // MARK: - Извлечение кода из Markdown ```lang ... ``` при отсутствии тегов
+    private static func extractCodeBlockInvocation(_ text: String) -> Qwen3CoderInvocation? {
+        let pattern = #"```([a-zA-Z0-9_\-\.]+)?\n([\s\S]+?)```"#
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
+        let range = NSRange(text.startIndex..., in: text)
+        guard let match = regex.firstMatch(in: text, options: [], range: range),
+              let codeRange = Range(match.range(at: 2), in: text) else {
+            return nil
+        }
+
+        let code = String(text[codeRange])
+        var lang = ""
+        if let langRange = Range(match.range(at: 1), in: text) {
+            lang = String(text[langRange]).lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        let filePattern = #"\b([a-zA-Z0-9_\-]+\.(html|htm|css|js|ts|py|swift|json|sh|md|txt))\b"#
+        var detectedPath = ""
+        if let fileRegex = try? NSRegularExpression(pattern: filePattern, options: [.caseInsensitive]) {
+            if let fileMatch = fileRegex.firstMatch(in: text, options: [], range: range),
+               let pathRange = Range(fileMatch.range(at: 1), in: text) {
+                detectedPath = String(text[pathRange])
+            }
+        }
+
+        if detectedPath.isEmpty {
+            switch lang {
+            case "html", "htm": detectedPath = "index.html"
+            case "swift": detectedPath = "main.swift"
+            case "py", "python": detectedPath = "script.py"
+            case "js", "javascript": detectedPath = "index.js"
+            case "css": detectedPath = "style.css"
+            case "json": detectedPath = "data.json"
+            default: detectedPath = "pink.html"
+            }
+        }
+
+        return .init(name: "write_file", arguments: [
+            "path": detectedPath,
+            "content": code
+        ])
+    }
+
+    static func removingToolMarkup(from text: String) -> String {
+        var output = text
+        while let start = output.range(of: "<tool_call>"),
+              let end = output.range(of: "</tool_call>", range: start.upperBound..<output.endIndex) {
+            output.removeSubrange(start.lowerBound..<end.upperBound)
+        }
+        return output.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

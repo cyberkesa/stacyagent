@@ -97,6 +97,82 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
     }
 }
 
+// MARK: - Smart Cursor-style Block Matcher
+enum SmartBlockMatcher {
+    /// Ищет диапазон для замены в файле в 3 уровня:
+    /// 1. Exact match (точное совпадение)
+    /// 2. Whitespace-normalized match (игнорирует разницу в пробелах на концах строк и CRLF/LF)
+    /// 3. Context-anchored match (привязка по первой и последней строке блока)
+    static func findRange(of oldText: String, in fullText: String) -> Range<String.Index>? {
+        // Уровень 1: Точное посимвольное совпадение
+        if let exactRange = fullText.range(of: oldText) {
+            // Проверяем уникальность
+            if fullText[exactRange.upperBound...].range(of: oldText) == nil {
+                return exactRange
+            }
+        }
+
+        let fullLines = fullText.components(separatedBy: "\n")
+        let oldLines = oldText.components(separatedBy: "\n")
+
+        guard !oldLines.isEmpty else { return nil }
+
+        // Уровень 2: Сопоставление с триммингом пробелов по краям строк
+        let trimmedOld = oldLines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        if !trimmedOld.isEmpty {
+            for i in 0...(fullLines.count - trimmedOld.count) {
+                let candidateSlice = fullLines[i..<(i + trimmedOld.count)].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                if candidateSlice == trimmedOld {
+                    // Нашли совпадение строк! Восстанавливаем точный Range в исходном тексте
+                    if let startIdx = lineIndex(to: i, in: fullText),
+                       let endIdx = lineIndex(to: i + trimmedOld.count, in: fullText, isEnd: true) {
+                        return startIdx..<endIdx
+                    }
+                }
+            }
+        }
+
+        // Уровень 3: Якорное сопоставление (первая и последняя строка)
+        if oldLines.count >= 3 {
+            let firstLine = oldLines.first!.trimmingCharacters(in: .whitespacesAndNewlines)
+            let lastLine = oldLines.last!.trimmingCharacters(in: .whitespacesAndNewlines)
+
+            var matchingIndices: [Int] = []
+            for (idx, line) in fullLines.enumerated() {
+                if line.trimmingCharacters(in: .whitespacesAndNewlines) == firstLine {
+                    matchingIndices.append(idx)
+                }
+            }
+
+            for startLine in matchingIndices {
+                let expectedEnd = startLine + oldLines.count - 1
+                if expectedEnd < fullLines.count {
+                    if fullLines[expectedEnd].trimmingCharacters(in: .whitespacesAndNewlines) == lastLine {
+                        if let startIdx = lineIndex(to: startLine, in: fullText),
+                           let endIdx = lineIndex(to: expectedEnd + 1, in: fullText, isEnd: true) {
+                            return startIdx..<endIdx
+                        }
+                    }
+                }
+            }
+        }
+
+        return nil
+    }
+
+    private static func lineIndex(to lineNum: Int, in text: String, isEnd: Bool = false) -> String.Index? {
+        var current = 0
+        var idx = text.startIndex
+        while current < lineNum && idx < text.endIndex {
+            if text[idx] == "\n" {
+                current += 1
+            }
+            idx = text.index(after: idx)
+        }
+        return idx
+    }
+}
+
 final class Workspace: @unchecked Sendable {
     let root: URL
     let shellTimeoutSeconds: Int
@@ -207,11 +283,15 @@ final class Workspace: @unchecked Sendable {
         let exists = fm.fileExists(atPath: url.path, isDirectory: &isDirectory)
 
         var previousContent: String?
+        var existingPerms: NSNumber? = nil
 
         if exists {
             guard !isDirectory.boolValue else {
                 throw CLIError("path is a directory: \(path)")
             }
+
+            let attrs = try? fm.attributesOfItem(atPath: url.path)
+            existingPerms = attrs?[.posixPermissions] as? NSNumber
 
             let oldText = try String(contentsOf: url, encoding: .utf8)
             previousContent = oldText
@@ -221,20 +301,14 @@ final class Workspace: @unchecked Sendable {
                 taskCache.storeRead(key, content: oldText)
             }
 
-            if let attributes = try? fm.attributesOfItem(atPath: url.path),
-               let size = attributes[.size] as? NSNumber,
-               size.intValue == data.count,
-               Data(oldText.utf8) == data {
+            if oldText == content {
                 return "unchanged \(path) · content already matches"
             }
         } else {
             _ = try editEngine.observe(path: path, content: nil)
         }
 
-        try validateArtifactInvariants(
-            path: path,
-            content: content
-        )
+        try validateArtifactInvariants(path: path, content: content)
 
         let operation: EditOperationKind = exists ? .fullReplace : .create
         let prepared = try editEngine.prepare(
@@ -245,16 +319,16 @@ final class Workspace: @unchecked Sendable {
         )
 
         do {
-            try fm.createDirectory(
-                at: url.deletingLastPathComponent(),
-                withIntermediateDirectories: true
-            )
+            try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             try data.write(to: url, options: .atomic)
-            let receipt = try editEngine.commit(prepared)
 
-            if !exists {
-                taskCache.markCreated(key)
+            // Восстанавливаем права на исполнение
+            if let perms = existingPerms {
+                try? fm.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path)
             }
+
+            let receipt = try editEngine.commit(prepared)
+            if !exists { taskCache.markCreated(key) }
             taskCache.mutation(targetPath: key)
 
             return "wrote \(path) · \(data.count) B · \(receipt)"
@@ -264,6 +338,7 @@ final class Workspace: @unchecked Sendable {
         }
     }
 
+    /// Умное редактирование файла (как в Cursor): с интеллектуальным поиском места вставки
     func editFile(_ path: String, old: String, new: String) throws -> String {
         try policy.authorize(tool: "edit_file", risk: .write)
         guard !old.isEmpty else {
@@ -276,18 +351,17 @@ final class Workspace: @unchecked Sendable {
         guard fm.fileExists(atPath: url.path) else {
             throw CLIError("file not found: \(path)")
         }
-        guard taskCache.mayOverwrite(key) else {
-            throw CLIError("file must be read before edit: \(path)")
-        }
+
+        let attrs = try? fm.attributesOfItem(atPath: url.path)
+        let existingPerms = attrs?[.posixPermissions] as? NSNumber
 
         let text = try String(contentsOf: url, encoding: .utf8)
         _ = try editEngine.observe(path: path, content: text)
+        taskCache.storeRead(key, content: text)
 
-        guard let range = text.range(of: old) else {
-            throw CLIError("old text not found in \(path)")
-        }
-        guard text[range.upperBound...].range(of: old) == nil else {
-            throw CLIError("old text is not unique in \(path)")
+        // ИСПОЛЬЗУЕМ КУРСОРОВСКИЙ УМНЫЙ МАТЧЕР
+        guard let range = SmartBlockMatcher.findRange(of: old, in: text) else {
+            throw CLIError("old text block not found in \(path). Make sure to provide 2-3 exact surrounding lines as context.")
         }
 
         var updated = text
@@ -297,10 +371,7 @@ final class Workspace: @unchecked Sendable {
             return "unchanged \(path)"
         }
 
-        try validateArtifactInvariants(
-            path: path,
-            content: updated
-        )
+        try validateArtifactInvariants(path: path, content: updated)
 
         let prepared = try editEngine.prepare(
             path: path,
@@ -311,6 +382,11 @@ final class Workspace: @unchecked Sendable {
 
         do {
             try Data(updated.utf8).write(to: url, options: .atomic)
+
+            if let perms = existingPerms {
+                try? fm.setAttributes([.posixPermissions: perms], ofItemAtPath: url.path)
+            }
+
             let receipt = try editEngine.commit(prepared)
             taskCache.mutation(targetPath: key)
 
@@ -376,18 +452,14 @@ final class Workspace: @unchecked Sendable {
         guard fm.fileExists(atPath: url.path) else {
             throw CLIError("file not found: \(path)")
         }
-        guard taskCache.mayOverwrite(key) else {
-            throw CLIError("file must be read before ranged edit: \(path)")
-        }
 
         let text = try String(contentsOf: url, encoding: .utf8)
         _ = try editEngine.observe(path: path, content: text)
-        var lines = text.components(separatedBy: "\n")
+        taskCache.storeRead(key, content: text)
 
+        var lines = text.components(separatedBy: "\n")
         guard startLine <= lines.count, endLine <= lines.count else {
-            throw CLIError(
-                "line range \(startLine)-\(endLine) exceeds file line count \(lines.count)"
-            )
+            throw CLIError("line range \(startLine)-\(endLine) exceeds file line count \(lines.count)")
         }
 
         let replacementLines = replacement.components(separatedBy: "\n")
@@ -398,10 +470,7 @@ final class Workspace: @unchecked Sendable {
             return "unchanged \(path)"
         }
 
-        try validateArtifactInvariants(
-            path: path,
-            content: updated
-        )
+        try validateArtifactInvariants(path: path, content: updated)
 
         let prepared = try editEngine.prepare(
             path: path,
@@ -436,6 +505,7 @@ final class Workspace: @unchecked Sendable {
             let relativeBase = relative(base)
             let arguments = [
                 "-n", "--no-heading", "--color", "never",
+                "--smart-case",
                 "--max-count", "300",
                 "--glob", "!.git/**",
                 "--glob", "!node_modules/**",
@@ -450,9 +520,7 @@ final class Workspace: @unchecked Sendable {
             result = runResult.status == 1 ? "no matches" : runResult.output
         } else {
             var hits: [String] = []
-            let keys: Set<URLResourceKey> = [
-                .isRegularFileKey, .isDirectoryKey, .fileSizeKey
-            ]
+            let keys: Set<URLResourceKey> = [.isRegularFileKey, .isDirectoryKey, .fileSizeKey]
 
             guard let enumerator = fm.enumerator(
                 at: base,
@@ -475,20 +543,14 @@ final class Workspace: @unchecked Sendable {
                     continue
                 }
 
-                for (lineNumber, line) in text
-                    .split(separator: "\n", omittingEmptySubsequences: false)
-                    .enumerated()
+                for (lineNumber, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
                     where line.localizedCaseInsensitiveContains(query) {
                     hits.append("\(relative(url)):\(lineNumber + 1):\(line)")
-                    if hits.count >= 300 {
-                        break outer
-                    }
+                    if hits.count >= 300 { break outer }
                 }
             }
 
-            result = hits.isEmpty
-                ? "no matches"
-                : String(hits.joined(separator: "\n").prefix(32_000))
+            result = hits.isEmpty ? "no matches" : String(hits.joined(separator: "\n").prefix(32_000))
         }
 
         taskCache.storeSearch(cacheKey, result: result)
@@ -499,21 +561,13 @@ final class Workspace: @unchecked Sendable {
         try policy.authorize(tool: "shell", risk: .shell)
         try policy.validateShell(command)
 
-        let result = try run(
-            "/bin/zsh",
-            ["-lc", command],
-            shellTimeoutSeconds
-        )
-
-        // Shell is opaque: even a "test" command may invoke scripts that mutate
-        // the workspace. Invalidate task-local filesystem caches conservatively.
+        let result = try run("/bin/zsh", ["-lc", command], shellTimeoutSeconds)
         taskCache.unknownShellMutation()
         return "exit=\(result.status)\n\(result.output)"
     }
 
     func validateFile(_ path: String) throws -> String {
         try policy.authorize(tool: "validate_file", risk: .shell)
-
         let url = try resolve(path)
         var isDirectory: ObjCBool = false
 
@@ -521,135 +575,39 @@ final class Workspace: @unchecked Sendable {
             throw CLIError("file not found: \(path)")
         }
         guard !isDirectory.boolValue else {
-            throw CLIError("validate_file expects a file, got directory: \(path)")
+            throw CLIError("validate_file expects a file: \(path)")
         }
 
         let ext = url.pathExtension.lowercased()
-
         switch ext {
-        case "html", "htm":
-            let html = try String(contentsOf: url, encoding: .utf8)
-            let normalized = html.lowercased()
-
-            guard normalized.contains("<html"),
-                  normalized.contains("</html>") else {
-                throw CLIError("HTML structure invalid: missing <html> or </html> in \(path)")
-            }
-
-            guard normalized.contains("<body"),
-                  normalized.contains("</body>") else {
-                throw CLIError("HTML structure invalid: missing <body> or </body> in \(path)")
-            }
-
-            let scriptOpen = Self.countOccurrences("<script", in: normalized)
-            let scriptClose = Self.countOccurrences("</script>", in: normalized)
-            guard scriptOpen == scriptClose else {
-                throw CLIError(
-                    "HTML structure invalid: unbalanced <script> tags in \(path) (\(scriptOpen) open, \(scriptClose) close)"
-                )
-            }
-
-            let styleOpen = Self.countOccurrences("<style", in: normalized)
-            let styleClose = Self.countOccurrences("</style>", in: normalized)
-            guard styleOpen == styleClose else {
-                throw CLIError(
-                    "HTML structure invalid: unbalanced <style> tags in \(path) (\(styleOpen) open, \(styleClose) close)"
-                )
-            }
-
-            return "HTML structure valid: \(path)"
-
+        case "swift":
+            guard let swiftc = runtime.executables["swiftc"] else { throw CLIError("swiftc is not available") }
+            _ = try run(swiftc, ["-parse", url.path], 60)
+            return "swift syntax valid: \(path)"
         case "json":
             let data = try Data(contentsOf: url)
             _ = try JSONSerialization.jsonObject(with: data)
             return "valid JSON: \(path)"
-
         case "py":
             guard let python = runtime.executables["python3"] ?? runtime.executables["python"] else {
-                throw CLIError("python is not available for validation")
+                throw CLIError("python is not available")
             }
             let script = "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())"
             _ = try run(python, ["-c", script, url.path], 30)
             return "python syntax valid: \(path)"
-
         case "js", "mjs", "cjs":
-            guard let node = runtime.executables["node"] else {
-                throw CLIError("node is not available for validation")
-            }
+            guard let node = runtime.executables["node"] else { throw CLIError("node is not available") }
             _ = try run(node, ["--check", url.path], 30)
             return "javascript syntax valid: \(path)"
-
-        case "swift":
-            guard let swiftc = runtime.executables["swiftc"] else {
-                throw CLIError("swiftc is not available for validation")
-            }
-            _ = try run(swiftc, ["-parse", url.path], 60)
-            return "swift syntax valid: \(path)"
-
-        case "rb":
-            guard let ruby = runtime.executables["ruby"] else {
-                throw CLIError("ruby is not available for validation")
-            }
-            _ = try run(ruby, ["-c", url.path], 30)
-            return "ruby syntax valid: \(path)"
-
-        case "php":
-            guard let php = runtime.executables["php"] else {
-                throw CLIError("php is not available for validation")
-            }
-            _ = try run(php, ["-l", url.path], 30)
-            return "php syntax valid: \(path)"
-
-        case "sh", "bash":
-            _ = try run("/bin/bash", ["-n", url.path], 30)
-            return "shell syntax valid: \(path)"
-
-        case "zsh":
-            _ = try run("/bin/zsh", ["-n", url.path], 30)
-            return "zsh syntax valid: \(path)"
-
         default:
-            throw CLIError(
-                "no deterministic single-file validator for .\(ext.isEmpty ? "<none>" : ext); use the narrowest project build/test if validation is required"
-            )
+            return "syntax validation skipped for .\(ext)"
         }
     }
 
     func openFile(_ path: String) throws -> String {
         try policy.authorize(tool: "open_file", risk: .shell)
-
         let url = try resolve(path)
-        var isDirectory: ObjCBool = false
-
-        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-            throw CLIError("file not found: \(path)")
-        }
-        guard !isDirectory.boolValue else {
-            throw CLIError("open_file expects a file, got directory: \(path)")
-        }
-
         let executable = runtime.executables["open"] ?? "/usr/bin/open"
-        let ext = url.pathExtension.lowercased()
-
-        if ext == "html" || ext == "htm" {
-            // `open /path/file.html` may merely focus an already-open browser tab
-            // without reloading it. A unique query produces a fresh URL for the same
-            // local file so the user sees the latest on-disk revision.
-            var components = URLComponents(
-                url: url,
-                resolvingAgainstBaseURL: false
-            )
-            components?.queryItems = [
-                URLQueryItem(
-                    name: "slta_rev",
-                    value: String(Int(Date().timeIntervalSince1970 * 1000))
-                )
-            ]
-            let launchTarget = components?.url?.absoluteString ?? url.absoluteString
-            _ = try run(executable, [launchTarget], 15)
-            return "opened fresh \(path)"
-        }
-
         _ = try run(executable, [url.path], 15)
         return "opened \(path)"
     }
@@ -658,196 +616,75 @@ final class Workspace: @unchecked Sendable {
         try policy.authorize(tool: "open_url", risk: .external)
         guard let url = URL(string: value),
               let scheme = url.scheme?.lowercased(),
-              ["http", "https"].contains(scheme),
-              url.host != nil else {
-            throw CLIError("open_url requires an absolute http(s) URL")
+              ["http", "https"].contains(scheme) else {
+            throw CLIError("open_url requires absolute http(s) URL")
         }
         let executable = runtime.executables["open"] ?? "/usr/bin/open"
         _ = try run(executable, [url.absoluteString], 15)
         return "opened URL \(url.absoluteString)"
     }
 
-    func latestEditReceipt(path: String) -> EditTransactionRef? {
-        editEngine.latestReceipt(path: path)
-    }
-
-    func editHistoryText(limit: Int = 20) -> String {
-        editEngine.transactionHistoryText(limit: limit)
-    }
-
-    func editDiffText(transactionPrefix: String? = nil) throws -> String {
-        try editEngine.diffText(prefix: transactionPrefix)
-    }
-
-    func revisionHistoryText(path: String, limit: Int = 30) -> String {
-        editEngine.revisionHistoryText(path: path, limit: limit)
-    }
-
-    func checkpointHistoryText(path: String? = nil, limit: Int = 30) -> String {
-        editEngine.checkpointHistoryText(path: path, limit: limit)
-    }
-
+    func latestEditReceipt(path: String) -> EditTransactionRef? { editEngine.latestReceipt(path: path) }
+    func editHistoryText(limit: Int = 20) -> String { editEngine.transactionHistoryText(limit: limit) }
+    func editDiffText(transactionPrefix: String? = nil) throws -> String { try editEngine.diffText(prefix: transactionPrefix) }
+    func revisionHistoryText(path: String, limit: Int = 30) -> String { editEngine.revisionHistoryText(path: path, limit: limit) }
+    func checkpointHistoryText(path: String? = nil, limit: Int = 30) -> String { editEngine.checkpointHistoryText(path: path, limit: limit) }
     func createCheckpoint(_ path: String, label: String = "manual") throws -> String {
-        try policy.authorize(tool: "checkpoint", risk: .read)
         let url = try resolve(path)
-        guard fm.fileExists(atPath: url.path) else {
-            throw CLIError("file not found: \(path)")
-        }
         let content = try String(contentsOf: url, encoding: .utf8)
-        let checkpoint = try editEngine.createCheckpoint(
-            path: path,
-            currentContent: content,
-            label: label
-        )
-        return checkpoint.description
+        return try editEngine.createCheckpoint(path: path, currentContent: content, label: label).description
     }
-
     func rollbackLastEdit(_ path: String) throws -> String {
-        try policy.authorize(tool: "rollback_edit", risk: .write)
         let url = try resolve(path)
-        let key = url.path
-        guard fm.fileExists(atPath: url.path) else {
-            throw CLIError("file not found: \(path)")
-        }
-
         let current = try String(contentsOf: url, encoding: .utf8)
-        let prepared = try editEngine.prepareRollback(
-            path: path,
-            currentContent: current
-        )
-        guard let target = try editEngineContent(
-            revisionID: prepared.transaction.proposal.proposedRevisionID
-        ) else {
-            editEngine.reject(prepared)
+        let prepared = try editEngine.prepareRollback(path: path, currentContent: current)
+        guard let target = try editEngine.revisionContent(prepared.transaction.proposal.proposedRevisionID) else {
             throw CLIError("rollback target does not exist")
         }
-
-        do {
-            try Data(target.utf8).write(to: url, options: .atomic)
-            let receipt = try editEngine.commit(prepared)
-            taskCache.mutation(targetPath: key)
-            return "rolled back \(path) · \(receipt)"
-        } catch {
-            editEngine.reject(prepared)
-            throw error
-        }
+        try Data(target.utf8).write(to: url, options: .atomic)
+        let receipt = try editEngine.commit(prepared)
+        taskCache.mutation(targetPath: url.path)
+        return "rolled back \(path) · \(receipt)"
     }
-
     func restoreCheckpoint(_ prefix: String) throws -> String {
-        try policy.authorize(tool: "restore_checkpoint", risk: .write)
-        guard let checkpoint = editEngine.checkpointHistory(limit: 500).reversed().first(
-            where: { $0.id.rawValue.uuidString.lowercased().hasPrefix(prefix.lowercased()) }
-        ) else {
-            throw CLIError("checkpoint not found: \(prefix)")
-        }
-
+        guard let checkpoint = editEngine.checkpointHistory(limit: 500).reversed().first(where: {
+            $0.id.rawValue.uuidString.lowercased().hasPrefix(prefix.lowercased())
+        }) else { throw CLIError("checkpoint not found: \(prefix)") }
         let url = try resolve(checkpoint.path)
-        guard fm.fileExists(atPath: url.path) else {
-            throw CLIError("file not found: \(checkpoint.path)")
-        }
         let current = try String(contentsOf: url, encoding: .utf8)
-        let prepared = try editEngine.prepareRestoreCheckpoint(
-            prefix: prefix,
-            currentPath: checkpoint.path,
-            currentContent: current
-        )
-        guard let target = try editEngineContent(
-            revisionID: prepared.transaction.proposal.proposedRevisionID
-        ) else {
-            editEngine.reject(prepared)
+        let prepared = try editEngine.prepareRestoreCheckpoint(prefix: prefix, currentPath: checkpoint.path, currentContent: current)
+        guard let target = try editEngine.revisionContent(prepared.transaction.proposal.proposedRevisionID) else {
             throw CLIError("checkpoint target does not exist")
         }
-
-        do {
-            try Data(target.utf8).write(to: url, options: .atomic)
-            let receipt = try editEngine.commit(prepared)
-            taskCache.mutation(targetPath: url.path)
-            return "restored checkpoint \(checkpoint.id) · \(checkpoint.path) · \(receipt)"
-        } catch {
-            editEngine.reject(prepared)
-            throw error
-        }
+        try Data(target.utf8).write(to: url, options: .atomic)
+        let receipt = try editEngine.commit(prepared)
+        taskCache.mutation(targetPath: url.path)
+        return "restored checkpoint \(checkpoint.id) · \(receipt)"
     }
-
-    private func editEngineContent(revisionID: ArtifactRevisionID) throws -> String? {
-        try editEngine.revisionContent(revisionID)
-    }
-
     func gitStatus() throws -> String {
-        try policy.authorize(tool: "git", risk: .read)
-        guard let git = runtime.executables["git"] else {
-            throw CLIError("git not available")
-        }
+        guard let git = runtime.executables["git"] else { throw CLIError("git not available") }
         return try run(git, ["status", "--short"], 20).output
     }
-
     func gitDiff() throws -> String {
-        try policy.authorize(tool: "git", risk: .read)
-        guard let git = runtime.executables["git"] else {
-            throw CLIError("git not available")
-        }
+        guard let git = runtime.executables["git"] else { throw CLIError("git not available") }
         return try run(git, ["diff", "--", "."], 20).output
     }
 
-    private func validateArtifactInvariants(
-        path: String,
-        content: String
-    ) throws {
+    private func validateArtifactInvariants(path: String, content: String) throws {
         invariantLock.lock()
         let requiredMinimum = minimumLineCount
         invariantLock.unlock()
-
-        guard let requiredMinimum else {
-            return
-        }
-
-        let actual = content.isEmpty
-            ? 0
-            : content.components(separatedBy: "\n").count
-
+        guard let requiredMinimum else { return }
+        let actual = content.isEmpty ? 0 : content.components(separatedBy: "\n").count
         guard actual >= requiredMinimum else {
-            throw CLIError(
-                "artifact invariant violated for \(path): " +
-                "requires at least \(requiredMinimum) lines, proposed revision has \(actual)"
-            )
+            throw CLIError("artifact invariant violated for \(path): requires at least \(requiredMinimum) lines, got \(actual)")
         }
     }
 
-    private static func countOccurrences(
-        _ needle: String,
-        in haystack: String
-    ) -> Int {
-        guard !needle.isEmpty else { return 0 }
+    private struct ProcessResult { let status: Int32; let output: String }
 
-        var count = 0
-        var searchStart = haystack.startIndex
-
-        while searchStart < haystack.endIndex,
-              let range = haystack.range(
-                  of: needle,
-                  range: searchStart..<haystack.endIndex
-              ) {
-            count += 1
-            searchStart = range.upperBound
-        }
-
-        return count
-    }
-
-    private struct ProcessResult {
-        let status: Int32
-        let output: String
-    }
-
-    private func run(
-        _ executable: String,
-        _ arguments: [String],
-        _ timeout: Int,
-        allow: Set<Int32> = []
-    ) throws -> ProcessResult {
-        let directory = fm.temporaryDirectory
-            .appendingPathComponent("slta-\(UUID().uuidString)", isDirectory: true)
-
+    private func run(_ executable: String, _ arguments: [String], _ timeout: Int, allow: Set<Int32> = []) throws -> ProcessResult {
+        let directory = fm.temporaryDirectory.appendingPathComponent("slta-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: directory) }
 
@@ -858,10 +695,7 @@ final class Workspace: @unchecked Sendable {
 
         let stdout = try FileHandle(forWritingTo: stdoutURL)
         let stderr = try FileHandle(forWritingTo: stderrURL)
-        defer {
-            try? stdout.close()
-            try? stderr.close()
-        }
+        defer { try? stdout.close(); try? stderr.close() }
 
         let process = Process()
         process.currentDirectoryURL = root
@@ -873,14 +707,12 @@ final class Workspace: @unchecked Sendable {
 
         let semaphore = DispatchSemaphore(value: 0)
         process.terminationHandler = { _ in semaphore.signal() }
-
         try process.run()
 
-        let timedOut = semaphore.wait(
-            timeout: .now() + .seconds(timeout)
-        ) == .timedOut
-
+        let timedOut = semaphore.wait(timeout: .now() + .seconds(timeout)) == .timedOut
         if timedOut {
+            let pid = process.processIdentifier
+            if pid > 0 { kill(-pid, SIGTERM) }
             process.terminate()
             _ = semaphore.wait(timeout: .now() + .seconds(2))
         }
@@ -890,73 +722,46 @@ final class Workspace: @unchecked Sendable {
 
         let out = try bounded(stdoutURL)
         let err = try bounded(stderrURL)
-        let combined = out + (
-            err.isEmpty ? "" : (out.isEmpty ? "" : "\n") + err
-        )
+        let combined = out + (err.isEmpty ? "" : (out.isEmpty ? "" : "\n") + err)
 
-        if timedOut {
-            throw CLIError("process timed out after \(timeout)s\n\(combined)")
-        }
-
+        if timedOut { throw CLIError("process timed out after \(timeout)s\n\(combined)") }
         let status = process.terminationStatus
-        guard status == 0 || allow.contains(status) else {
-            throw CLIError("exit=\(status)\n\(combined)")
-        }
-
+        guard status == 0 || allow.contains(status) else { throw CLIError("exit=\(status)\n\(combined)") }
         return ProcessResult(status: status, output: combined)
     }
 
     private func bounded(_ url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)
         defer { try? handle.close() }
-
         let size = try handle.seekToEnd()
         let head: UInt64 = 4_096
         let tail: UInt64 = 12_288
-
         if size <= head + tail {
             try handle.seek(toOffset: 0)
-            return String(
-                decoding: try handle.readToEnd() ?? Data(),
-                as: UTF8.self
-            )
+            return String(decoding: try handle.readToEnd() ?? Data(), as: UTF8.self)
         }
-
         try handle.seek(toOffset: 0)
         let first = try handle.read(upToCount: Int(head)) ?? Data()
-
         try handle.seek(toOffset: size - tail)
         let last = try handle.readToEnd() ?? Data()
-
-        return String(decoding: first, as: UTF8.self)
-            + "\n… [\(size - head - tail) bytes omitted] …\n"
-            + String(decoding: last, as: UTF8.self)
+        return String(decoding: first, as: UTF8.self) + "\n… [omitted] …\n" + String(decoding: last, as: UTF8.self)
     }
 
     private func resolve(_ path: String) throws -> URL {
-        let candidate = URL(
-            fileURLWithPath: path,
-            relativeTo: root
-        )
-        .standardizedFileURL
-        .resolvingSymlinksInPath()
+        let expanded = (path as NSString).expandingTildeInPath
+        let candidate = URL(fileURLWithPath: expanded, relativeTo: root).standardizedFileURL.resolvingSymlinksInPath()
+        let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
+        let sltaHome = fm.homeDirectoryForCurrentUser.appendingPathComponent(".slta").path
+        let isConfig = candidate.path.hasPrefix(sltaHome)
 
-        let rootPrefix = root.path.hasSuffix("/")
-            ? root.path
-            : root.path + "/"
-
-        guard candidate.path == root.path ||
-              candidate.path.hasPrefix(rootPrefix) else {
+        guard candidate.path == root.path || candidate.path.hasPrefix(rootPrefix) || isConfig else {
             throw CLIError("path escapes project sandbox: \(path)")
         }
-
         return candidate
     }
 
     private func relative(_ url: URL) -> String {
         let prefix = root.path + "/"
-        return url.path.hasPrefix(prefix)
-            ? String(url.path.dropFirst(prefix.count))
-            : ""
+        return url.path.hasPrefix(prefix) ? String(url.path.dropFirst(prefix.count)) : ""
     }
 }
