@@ -1,0 +1,903 @@
+import Foundation
+import MLXLMCommon
+
+final class ToolRegistry: @unchecked Sendable {
+    let state = RuntimeState()
+
+    private let workspace: Workspace
+    private let mcp: MCPBridge
+    private let events: EventBus
+    private let runtime: RuntimeEnvironment
+
+    private let listDirTool: Tool<PathInput, TextOutput>
+    private let readFileTool: Tool<PathInput, TextOutput>
+    private let readFileRangeTool: Tool<ReadFileRangeInput, TextOutput>
+    private let writeFileTool: Tool<WriteFileInput, TextOutput>
+    private let editFileTool: Tool<EditFileInput, TextOutput>
+    private let editFileRangeTool: Tool<EditFileRangeInput, TextOutput>
+    private let searchTool: Tool<SearchInput, TextOutput>
+    private let shellTool: Tool<ShellInput, TextOutput>
+    private let validateFileTool: Tool<PathInput, TextOutput>
+    private let openFileTool: Tool<PathInput, TextOutput>
+    private let openURLTool: Tool<URLInput, TextOutput>
+    private let gitStatusTool: Tool<EmptyInput, TextOutput>
+    private let gitDiffTool: Tool<EmptyInput, TextOutput>
+    private let mcpServersTool: Tool<EmptyInput, TextOutput>
+    private let mcpListToolsTool: Tool<MCPServerInput, TextOutput>
+    private let mcpCallTool: Tool<MCPCallInput, TextOutput>
+
+    init(workspace: Workspace, mcp: MCPBridge, events: EventBus, runtime: RuntimeEnvironment) {
+        self.workspace = workspace
+        self.mcp = mcp
+        self.events = events
+        self.runtime = runtime
+
+        listDirTool = Tool(
+            name: "list_dir",
+            description: "List entries in a directory inside the current project.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative directory path, usually .")
+            ]
+        ) { input in TextOutput(result: try workspace.listDir(input.path)) }
+
+        readFileTool = Tool(
+            name: "read_file",
+            description: "Read a UTF-8 text file inside the current project.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative file path")
+            ]
+        ) { input in
+            let content = try workspace.readFile(input.path)
+            return TextOutput(
+                result: NativeToolEnvelope.encodeRead(
+                    path: input.path,
+                    content: content
+                )
+            )
+        }
+
+        readFileRangeTool = Tool(
+            name: "read_file_range",
+            description: "Read only a 1-based inclusive line range from a UTF-8 project file. Prefer for localized work on larger files.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative file path"),
+                .required("start_line", type: .double, description: "First line, 1-based inclusive"),
+                .required("end_line", type: .double, description: "Last line, 1-based inclusive")
+            ]
+        ) { input in
+            guard let startLine = Self.integralLine(input.start_line),
+                  let endLine = Self.integralLine(input.end_line) else {
+                throw CLIError("read_file_range requires whole-number line values")
+            }
+            let content = try workspace.readFileRange(
+                input.path,
+                startLine: startLine,
+                endLine: endLine
+            )
+            return TextOutput(
+                result: NativeToolEnvelope.encodeObservation(
+                    path: input.path,
+                    content: content
+                )
+            )
+        }
+
+        writeFileTool = Tool(
+            name: "write_file",
+            description: "Create or fully rewrite a text file. Content may be any programming language or text format.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative file path"),
+                .required("content", type: .string, description: "Complete file contents, preserved exactly")
+            ]
+        ) { input in TextOutput(result: try workspace.writeFile(input.path, content: input.content)) }
+
+        editFileTool = Tool(
+            name: "edit_file",
+            description: "Replace one unique exact text block in a project file.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative file path"),
+                .required("old", type: .string, description: "Unique exact text to replace"),
+                .required("new", type: .string, description: "Replacement text")
+            ]
+        ) { input in TextOutput(result: try workspace.editFile(input.path, old: input.old, new: input.new)) }
+
+        editFileRangeTool = Tool(
+            name: "edit_file_range",
+            description: "Replace a 1-based inclusive line range in a previously observed project file. Prefer when the exact line window is known.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative file path"),
+                .required("start_line", type: .double, description: "First line, 1-based inclusive"),
+                .required("end_line", type: .double, description: "Last line, 1-based inclusive"),
+                .required("replacement", type: .string, description: "Replacement text for the selected lines")
+            ]
+        ) { input in
+            guard let startLine = Self.integralLine(input.start_line),
+                  let endLine = Self.integralLine(input.end_line) else {
+                throw CLIError("edit_file_range requires whole-number line values")
+            }
+            return TextOutput(
+                result: try workspace.editFileRange(
+                    input.path,
+                    startLine: startLine,
+                    endLine: endLine,
+                    replacement: input.replacement
+                )
+            )
+        }
+
+        searchTool = Tool(
+            name: "search",
+            description: "Search text recursively inside project files.",
+            parameters: [
+                .required("query", type: .string, description: "Text to search for"),
+                .optional("path", type: .string, description: "Project-relative directory, default .")
+            ]
+        ) { input in TextOutput(result: try workspace.search(input.query, path: input.path ?? ".")) }
+
+        shellTool = Tool(
+            name: "shell",
+            description: "Run a shell command in the project directory. Use for builds, tests, linters and project tooling.",
+            parameters: [
+                .required("command", type: .string, description: "Shell command")
+            ]
+        ) { input in TextOutput(result: try workspace.shell(input.command)) }
+
+        validateFileTool = Tool(
+            name: "validate_file",
+            description: "Run deterministic validation for one supported source/data/web file without inventing a shell command. Use before generic shell when it fits.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative file path")
+            ]
+        ) { input in TextOutput(result: try workspace.validateFile(input.path)) }
+
+        openFileTool = Tool(
+            name: "open_file",
+            description: "Open one existing project file with the macOS default application. Prefer this over shell for launching a generated HTML/demo artifact.",
+            parameters: [
+                .required("path", type: .string, description: "Project-relative file path")
+            ]
+        ) { input in TextOutput(result: try workspace.openFile(input.path)) }
+
+        openURLTool = Tool(
+            name: "open_url",
+            description: "Open one verified absolute http(s) URL in the macOS default browser.",
+            parameters: [
+                .required("url", type: .string, description: "Absolute http(s) URL previously obtained from trusted tool evidence")
+            ]
+        ) { input in TextOutput(result: try workspace.openURL(input.url)) }
+
+        gitStatusTool = Tool(
+            name: "git_status",
+            description: "Show git status for the current project.",
+            parameters: []
+        ) { _ in TextOutput(result: try workspace.gitStatus()) }
+
+        gitDiffTool = Tool(
+            name: "git_diff",
+            description: "Show the current project git diff.",
+            parameters: []
+        ) { _ in TextOutput(result: try workspace.gitDiff()) }
+
+        let configuredServers = mcp.serverNames.joined(separator: ", ")
+
+        mcpServersTool = Tool(
+            name: "mcp_servers",
+            description: "List configured MCP servers. Currently configured: [\(configuredServers)].",
+            parameters: []
+        ) { _ in TextOutput(result: mcp.listServers()) }
+
+        mcpListToolsTool = Tool(
+            name: "mcp_list_tools",
+            description: "Discover tools exposed by an MCP server. Must choose from: [\(configuredServers)].",
+            parameters: [
+                .required("server", type: .string, description: "Configured MCP server name. One of: [\(configuredServers)]")
+            ]
+        ) { input in
+            let resolvedServer = Self.resolveServer(input.server, in: mcp.serverNames)
+            return TextOutput(result: try mcp.listTools(server: resolvedServer))
+        }
+
+        mcpCallTool = Tool(
+            name: "mcp_call",
+            description: "Call a tool on an MCP server. Available servers: [\(configuredServers)]. Discover tool names with mcp_list_tools first.",
+            parameters: [
+                .required("server", type: .string, description: "Server name. Must be one of: [\(configuredServers)]"),
+                .required("tool", type: .string, description: "Exact tool name discovered via mcp_list_tools"),
+                .required("arguments_json", type: .string, description: "JSON object matching tool schema")
+            ]
+        ) { input in
+            let resolvedServer = Self.resolveServer(input.server, in: mcp.serverNames)
+            let call = try mcp.call(
+                server: resolvedServer,
+                tool: input.tool,
+                argumentsJSON: input.arguments_json
+            )
+            return TextOutput(
+                result: MCPToolEnvelope.encode(
+                    server: resolvedServer,
+                    tool: input.tool,
+                    urls: call.urls,
+                    content: call.rendered
+                )
+            )
+        }
+    }
+
+    var schemas: [MLXLMCommon.ToolSpec] {
+        [
+            listDirTool.schema, readFileTool.schema, readFileRangeTool.schema,
+            writeFileTool.schema, editFileTool.schema, editFileRangeTool.schema,
+            searchTool.schema, shellTool.schema, validateFileTool.schema,
+            openFileTool.schema, openURLTool.schema, gitStatusTool.schema, gitDiffTool.schema,
+            mcpServersTool.schema, mcpListToolsTool.schema, mcpCallTool.schema
+        ]
+    }
+
+    func allowedToolNames(for capabilities: Set<ToolCapability>) -> Set<String> {
+        var names: Set<String> = []
+        if capabilities.contains(.projectRead) {
+            names.formUnion(["list_dir", "read_file", "read_file_range", "search"])
+        }
+        if capabilities.contains(.projectWrite) {
+            names.formUnion(["write_file", "edit_file", "edit_file_range"])
+        }
+        if capabilities.contains(.shell) {
+            names.formUnion(["shell", "validate_file", "open_file"])
+        }
+        if capabilities.contains(.gitRead) {
+            names.formUnion(["git_status", "git_diff"])
+        }
+        if capabilities.contains(.mcpDiscover) {
+            names.formUnion(["mcp_servers", "mcp_list_tools"])
+        }
+        if capabilities.contains(.mcpCall) {
+            names.formUnion(["mcp_servers", "mcp_list_tools", "mcp_call", "open_url"])
+        }
+        return names
+    }
+
+    func schemas(for capabilities: Set<ToolCapability>) -> [MLXLMCommon.ToolSpec] {
+        schemas(named: allowedToolNames(for: capabilities))
+    }
+
+    func schemas(named allowed: Set<String>) -> [MLXLMCommon.ToolSpec] {
+        let pairs: [(String, MLXLMCommon.ToolSpec)] = [
+            (listDirTool.name, listDirTool.schema),
+            (readFileTool.name, readFileTool.schema),
+            (readFileRangeTool.name, readFileRangeTool.schema),
+            (writeFileTool.name, writeFileTool.schema),
+            (editFileTool.name, editFileTool.schema),
+            (editFileRangeTool.name, editFileRangeTool.schema),
+            (searchTool.name, searchTool.schema),
+            (shellTool.name, shellTool.schema),
+            (validateFileTool.name, validateFileTool.schema),
+            (openFileTool.name, openFileTool.schema),
+            (openURLTool.name, openURLTool.schema),
+            (gitStatusTool.name, gitStatusTool.schema),
+            (gitDiffTool.name, gitDiffTool.schema),
+            (mcpServersTool.name, mcpServersTool.schema),
+            (mcpListToolsTool.name, mcpListToolsTool.schema),
+            (mcpCallTool.name, mcpCallTool.schema)
+        ]
+        return pairs.compactMap { allowed.contains($0.0) ? $0.1 : nil }
+    }
+
+    func execute(_ toolCall: MLXLMCommon.ToolCall, allowed: Set<String>) async -> String {
+        let name = toolCall.function.name
+
+        if (await state.taskSnapshot()).isComplete {
+            return #"{"ok":true,"status":"task_already_complete","instruction":"Do not call more tools."}"#
+        }
+
+        guard allowed.contains(name) else {
+            return #"{"ok":false,"error":"tool not granted for this turn"}"#
+        }
+
+        let protocolSnapshot = await state.taskSnapshot()
+        if let reason = ProtocolEngine.blockReason(
+            forTool: name,
+            snapshot: protocolSnapshot
+        ) {
+            return #"{"ok":true,"status":"protocol_blocked","reason":"\#(escapeJSON(reason))","instruction":"Follow the runtime task order instead of repeating this tool."}"#
+        }
+
+        let signature = name + ":" + String(describing: toolCall.function.arguments)
+        let mutating = SemanticToolCatalog.isMutating(name)
+        guard await state.mayExecute(signature: signature, mutating: mutating) else {
+            return #"{"ok":true,"status":"already_satisfied_or_repeated","instruction":"Do not repeat this action. Finish the current user request."}"#
+        }
+        await state.toolStarted()
+        await events.emit(.toolStarted(name: name))
+        let start = ContinuousClock.now
+
+        do {
+            let result: String
+            switch name {
+            case listDirTool.name:
+                result = try await toolCall.execute(with: listDirTool).toolResult
+                await state.observation(name)
+
+            case readFileTool.name:
+                let raw = try await toolCall.execute(with: readFileTool).toolResult
+                if let decoded = NativeToolEnvelope.decodeRead(raw) {
+                    result = decoded.content
+                    await state.readBack(path: decoded.path, content: decoded.content)
+                } else {
+                    result = raw
+                    await state.observation(name)
+                }
+
+            case readFileRangeTool.name:
+                let encoded = try await toolCall.execute(with: readFileRangeTool).toolResult
+                if let decoded = NativeToolEnvelope.decodeObservation(encoded) {
+                    result = decoded.content
+                    await state.observation(name, path: decoded.path)
+                } else {
+                    result = encoded
+                    await state.observation(name)
+                }
+
+            case writeFileTool.name:
+                result = try await toolCall.execute(with: writeFileTool).toolResult
+                let path = RuntimeState.pathFromMutationResult(result)
+                await state.nativeMutation(
+                    name,
+                    result: result,
+                    changed: !result.contains("unchanged "),
+                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) }
+                )
+
+            case editFileTool.name:
+                result = try await toolCall.execute(with: editFileTool).toolResult
+                let path = RuntimeState.pathFromMutationResult(result)
+                await state.nativeMutation(
+                    name,
+                    result: result,
+                    changed: !result.contains("unchanged "),
+                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) }
+                )
+
+            case editFileRangeTool.name:
+                result = try await toolCall.execute(with: editFileRangeTool).toolResult
+                let path = RuntimeState.pathFromMutationResult(result)
+                await state.nativeMutation(
+                    name,
+                    result: result,
+                    changed: !result.contains("unchanged "),
+                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) }
+                )
+
+            case searchTool.name:
+                result = try await toolCall.execute(with: searchTool).toolResult
+                await state.observation(name)
+
+            case shellTool.name:
+                result = try await toolCall.execute(with: shellTool).toolResult
+                await state.validationSuccess(name, isRealValidation: true)
+
+            case validateFileTool.name:
+                result = try await toolCall.execute(with: validateFileTool).toolResult
+                await state.validationSuccess(name, isRealValidation: true)
+
+            case openFileTool.name:
+                result = try await toolCall.execute(with: openFileTool).toolResult
+                await state.nativeLaunchSuccess(name, result: result)
+
+            case openURLTool.name:
+                result = try await toolCall.execute(with: openURLTool).toolResult
+                let url = result.hasPrefix("opened URL ")
+                    ? String(result.dropFirst("opened URL ".count))
+                    : ""
+                await state.externalSuccess(
+                    name,
+                    operation: "open_url",
+                    urls: url.isEmpty ? [] : [url]
+                )
+
+            case gitStatusTool.name:
+                result = try await toolCall.execute(with: gitStatusTool).toolResult
+                await state.observation(name)
+
+            case gitDiffTool.name:
+                result = try await toolCall.execute(with: gitDiffTool).toolResult
+                await state.observation(name)
+
+            case mcpServersTool.name:
+                result = try await toolCall.execute(with: mcpServersTool).toolResult
+                await state.observation(name)
+
+            case mcpListToolsTool.name:
+                result = try await toolCall.execute(with: mcpListToolsTool).toolResult
+                await state.observation(name)
+
+            case mcpCallTool.name:
+                let encoded = try await toolCall.execute(with: mcpCallTool).toolResult
+                if let decoded = MCPToolEnvelope.decode(encoded) {
+                    result = decoded.content
+                    await state.externalSuccess(
+                        name,
+                        server: decoded.server,
+                        operation: decoded.tool,
+                        urls: decoded.urls
+                    )
+                } else {
+                    result = encoded
+                    await state.externalSuccess(name)
+                }
+
+            default:
+                throw CLIError("unknown tool: \(name)")
+            }
+
+            let elapsed = ContinuousClock.now - start
+            await state.toolFinished(seconds: Self.seconds(elapsed))
+            await events.emit(.toolFinished(
+                name: name,
+                ok: true,
+                detail: compact(result),
+                duration: elapsed
+            ))
+            return result
+        } catch {
+            let message = String(describing: error)
+            let recoverable = isRecoverableError(tool: name, message: message)
+
+            if recoverable {
+                await state.recoverableFailure(name, message: message)
+            } else {
+                await state.failure(name, message: message)
+            }
+
+            let elapsed = ContinuousClock.now - start
+            await state.toolFinished(seconds: Self.seconds(elapsed))
+            await events.emit(.toolFinished(
+                name: name,
+                ok: false,
+                detail: compact(message),
+                duration: elapsed
+            ))
+
+            if recoverable {
+                return #"{"error":"\#(escapeJSON(message))","ok":false,"retry":true}"#
+            }
+
+            return #"{"error":"\#(escapeJSON(message))","ok":false}"#
+        }
+    }
+
+    func executeModelInvocations(
+        _ invocations: [Qwen3CoderInvocation],
+        allowed: Set<String>
+    ) async -> [(name: String, result: String)] {
+        var output: [(name: String, result: String)] = []
+        output.reserveCapacity(invocations.count)
+
+        for invocation in invocations {
+            let before = await state.taskSnapshot()
+            if before.isComplete || before.validation.lastToolFailed {
+                break
+            }
+
+            let result = await executeModelInvocation(invocation, allowed: allowed)
+            output.append((name: invocation.name, result: result))
+
+            let after = await state.taskSnapshot()
+            if after.isComplete || after.validation.lastToolFailed {
+                break
+            }
+
+            let mutating = SemanticToolCatalog.isMutating(invocation.name)
+            if mutating && ProtocolEngine.shouldYieldAfterMutation(after) {
+                break
+            }
+        }
+        return output
+    }
+
+    func executeModelInvocation(
+        _ invocation: Qwen3CoderInvocation,
+        allowed: Set<String>
+    ) async -> String {
+        await executeNormalized(
+            NormalizedToolInvocation(
+                name: invocation.name,
+                arguments: invocation.arguments,
+                source: .modelText
+            ),
+            allowed: allowed
+        )
+    }
+
+    func executeNormalized(
+        _ invocation: NormalizedToolInvocation,
+        allowed: Set<String>
+    ) async -> String {
+        let name = invocation.name
+        let args = invocation.arguments
+
+        let before = await state.taskSnapshot()
+        if before.isComplete {
+            return #"{"ok":true,"status":"task_already_complete","instruction":"Do not call more tools."}"#
+        }
+
+        guard allowed.contains(name) else {
+            return #"{"ok":false,"error":"tool not granted for this turn"}"#
+        }
+
+        if let reason = ProtocolEngine.blockReason(forTool: name, snapshot: before) {
+            return #"{"ok":true,"status":"protocol_blocked","reason":"\#(escapeJSON(reason))","instruction":"Follow runtime task order."}"#
+        }
+
+        do {
+            try validateInvocation(name: name, args: args)
+        } catch {
+            let message = String(describing: error)
+            await state.toolStarted()
+            await events.emit(.toolStarted(name: name))
+            await state.failure(name, message: message)
+            await events.emit(.toolFinished(name: name, ok: false, detail: compact(message), duration: .zero))
+            return #"{"ok":false,"error":"\#(escapeJSON(message))","kind":"schema"}"#
+        }
+
+        let signature = invocation.signature
+        let mutating = SemanticToolCatalog.isMutating(name)
+        guard await state.mayExecute(signature: signature, mutating: mutating) else {
+            return #"{"ok":true,"status":"already_satisfied_or_repeated","instruction":"Do not repeat this action."}"#
+        }
+
+        await state.toolStarted()
+        await events.emit(.toolStarted(name: name))
+        let start = ContinuousClock.now
+
+        do {
+            let result: String
+
+            switch name {
+            case "list_dir":
+                result = try workspace.listDir(args["path"] ?? ".")
+                await state.observation(name)
+
+            case "read_file":
+                guard let path = args["path"] else { throw CLIError("read_file requires path") }
+                result = try workspace.readFile(path)
+                await state.readBack(path: path, content: result)
+
+            case "read_file_range":
+                guard let path = args["path"],
+                      let start = Self.integralLine(args["start_line"]),
+                      let end = Self.integralLine(args["end_line"]) else {
+                    throw CLIError("read_file_range requires path, start_line, end_line")
+                }
+                result = try workspace.readFileRange(path, startLine: start, endLine: end)
+                await state.observation(name, path: path)
+
+            case "write_file":
+                guard let path = args["path"], let content = args["content"] else {
+                    throw CLIError("write_file requires path and content")
+                }
+                result = try workspace.writeFile(path, content: content)
+                await state.mutation(
+                    name,
+                    path: path,
+                    content: content,
+                    changed: !result.contains("unchanged "),
+                    transaction: workspace.latestEditReceipt(path: path)
+                )
+
+            case "edit_file":
+                guard let path = args["path"],
+                      let old = args["old"] ?? args["oldText"],
+                      let new = args["new"] ?? args["newText"] else {
+                    throw CLIError("edit_file requires path, old, new")
+                }
+                result = try workspace.editFile(path, old: old, new: new)
+                await state.mutation(
+                    name,
+                    path: path,
+                    content: nil,
+                    changed: !result.contains("unchanged "),
+                    transaction: workspace.latestEditReceipt(path: path)
+                )
+
+            case "edit_file_range":
+                guard let path = args["path"],
+                      let start = Self.integralLine(args["start_line"]),
+                      let end = Self.integralLine(args["end_line"]),
+                      let replacement = args["replacement"] else {
+                    throw CLIError("edit_file_range requires path, start_line, end_line, replacement")
+                }
+                result = try workspace.editFileRange(path, startLine: start, endLine: end, replacement: replacement)
+                await state.mutation(
+                    name,
+                    path: path,
+                    content: nil,
+                    changed: !result.contains("unchanged "),
+                    transaction: workspace.latestEditReceipt(path: path)
+                )
+
+            case "search":
+                guard let query = args["query"] else { throw CLIError("search requires query") }
+                result = try workspace.search(query, path: args["path"] ?? ".")
+                await state.observation(name)
+
+            case "shell":
+                guard let command = args["command"] else { throw CLIError("shell requires command") }
+                result = try workspace.shell(command)
+                await state.validationSuccess(name, isRealValidation: isValidationCommand(command))
+
+            case "validate_file":
+                guard let path = args["path"] else { throw CLIError("validate_file requires path") }
+                result = try workspace.validateFile(path)
+                await state.validationSuccess(name, isRealValidation: true, path: path)
+
+            case "open_file":
+                guard let path = args["path"] else { throw CLIError("open_file requires path") }
+                result = try workspace.openFile(path)
+                await state.launchSuccess(name, path: path)
+
+            case "open_url":
+                guard let url = args["url"] else { throw CLIError("open_url requires url") }
+                result = try workspace.openURL(url)
+                await state.externalSuccess(name, operation: "open_url", urls: [url])
+
+            case "git_status":
+                result = try workspace.gitStatus()
+                await state.observation(name)
+
+            case "git_diff":
+                result = try workspace.gitDiff()
+                await state.observation(name)
+
+            case "mcp_servers":
+                result = mcp.listServers()
+                await state.observation(name)
+
+            case "mcp_list_tools":
+                guard let rawServer = args["server"] else { throw CLIError("mcp_list_tools requires server") }
+                let server = Self.resolveServer(rawServer, in: mcp.serverNames)
+                result = try mcp.listTools(server: server)
+                await state.observation(name)
+
+            case "mcp_call":
+                guard let rawServer = args["server"], let tool = args["tool"] else {
+                    throw CLIError("mcp_call requires server and tool")
+                }
+                let server = Self.resolveServer(rawServer, in: mcp.serverNames)
+                let argumentsJSON = args["arguments_json"] ?? args["arguments"] ?? "{}"
+                let call = try mcp.call(server: server, tool: tool, argumentsJSON: argumentsJSON)
+                result = call.rendered
+                await state.externalSuccess(name, server: server, operation: tool, urls: call.urls)
+
+            default:
+                throw CLIError("unknown tool: \(name)")
+            }
+
+            let elapsed = ContinuousClock.now - start
+            await state.toolFinished(seconds: Self.seconds(elapsed))
+            await events.emit(.toolFinished(name: name, ok: true, detail: compact(result), duration: elapsed))
+            return result
+        } catch {
+            let message = String(describing: error)
+            let recoverable = isRecoverableError(tool: name, message: message)
+
+            if recoverable {
+                await state.recoverableFailure(name, message: message)
+            } else {
+                await state.failure(name, message: message)
+            }
+
+            let elapsed = ContinuousClock.now - start
+            await state.toolFinished(seconds: Self.seconds(elapsed))
+            await events.emit(.toolFinished(name: name, ok: false, detail: compact(message), duration: elapsed))
+
+            if recoverable {
+                return #"{"ok":false,"error":"\#(escapeJSON(message))","retry":true}"#
+            }
+            return #"{"ok":false,"error":"\#(escapeJSON(message))"}"#
+        }
+    }
+
+    func advanceProtocol(
+        allowed: Set<String>,
+        maxActions: Int = 8
+    ) async -> [(name: String, result: String)] {
+        var output: [(name: String, result: String)] = []
+
+        for _ in 0..<maxActions {
+            let before = await state.taskSnapshot()
+            let decision = ProtocolEngine.decision(for: before, allowed: allowed)
+
+            guard case .deterministic(let action) = decision else { break }
+
+            let invocation = action.normalizedInvocation
+            let result = await executeNormalized(invocation, allowed: allowed)
+            output.append((name: invocation.name, result: result))
+
+            let after = await state.taskSnapshot()
+            if after.isComplete || after.validation.lastToolFailed {
+                break
+            }
+        }
+        return output
+    }
+
+    func beginTask(_ text: String, decision: TurnDecision, continuity: TaskContinuity? = nil) async {
+        let spec = TaskCompiler.compile(userText: text, decision: decision, continuity: continuity)
+        workspace.beginTask(taskID: spec.id, constraints: spec.constraints)
+        await state.beginTask(spec)
+    }
+
+    func taskSnapshot() async -> TaskRuntimeSnapshot {
+        await state.taskSnapshot()
+    }
+
+    func editHistoryText(limit: Int = 20) -> String {
+        workspace.editHistoryText(limit: limit)
+    }
+
+    func editDiffText(transactionPrefix: String? = nil) throws -> String {
+        try workspace.editDiffText(transactionPrefix: transactionPrefix)
+    }
+
+    func revisionHistoryText(path: String, limit: Int = 30) -> String {
+        workspace.revisionHistoryText(path: path, limit: limit)
+    }
+
+    func checkpointHistoryText(path: String? = nil, limit: Int = 30) -> String {
+        workspace.checkpointHistoryText(path: path, limit: limit)
+    }
+
+    func createCheckpoint(path: String, label: String = "manual") throws -> String {
+        try workspace.createCheckpoint(path, label: label)
+    }
+
+    func rollbackLastEdit(path: String) throws -> String {
+        try workspace.rollbackLastEdit(path)
+    }
+
+    func restoreCheckpoint(prefix: String) throws -> String {
+        try workspace.restoreCheckpoint(prefix)
+    }
+
+    func directAnswer(for text: String) -> String? {
+        DirectRuntimeRouter.answer(text, runtime: runtime, mcpServers: mcp.listServers())
+    }
+    var runtimeContext: String { runtime.modelContext }
+    var projectPath: String { runtime.projectPath }
+
+    // MARK: - Server Resolution
+    private static func resolveServer(_ raw: String, in available: [String]) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if available.contains(trimmed) { return trimmed }
+
+        let lower = trimmed.lowercased()
+        if let match = available.first(where: { $0.lowercased() == lower }) {
+            return match
+        }
+        if let match = available.first(where: { $0.lowercased().contains(lower) || lower.contains($0.lowercased()) }) {
+            return match
+        }
+        // Автовыбор единственного доступного сервера по назначению
+        if lower.contains("search") || lower.contains("web") {
+            if let s = available.first(where: { $0.contains("search") }) { return s }
+        }
+        if lower.contains("browser") || lower.contains("page") || lower.contains("playwright") {
+            if let s = available.first(where: { $0.contains("playwright") || $0.contains("browser") }) { return s }
+        }
+        return trimmed
+    }
+
+    // MARK: - Error Classification
+    private func isRecoverableError(tool: String, message: String) -> Bool {
+        // Ошибки MCP теперь не убивают задачу, а дают модели возможность исправиться
+        if tool == "mcp_call" || tool == "mcp_list_tools" || tool == "mcp_servers" {
+            return true
+        }
+
+        let lower = message.lowercased()
+        if SemanticToolCatalog.isMutating(tool), lower.contains("artifact invariant violated") {
+            return true
+        }
+
+        guard tool == "edit_file" || tool == "edit_file_range" else { return false }
+
+        let markers = [
+            "old text not found", "old text is not unique", "file must be read before",
+            "line range", "exceeds file line count", "invalid line range"
+        ]
+        return markers.contains(where: lower.contains)
+    }
+
+    private static func integralLine(_ value: Double) -> Int? {
+        guard value.isFinite, value.rounded() == value, value >= 1, value <= Double(Int.max) else { return nil }
+        return Int(value)
+    }
+
+    private static func integralLine(_ value: String?) -> Int? {
+        guard let value, let number = Double(value.trimmingCharacters(in: .whitespacesAndNewlines)) else { return nil }
+        return integralLine(number)
+    }
+
+    private static func seconds(_ d: Duration) -> Double {
+        let c = d.components
+        return Double(c.seconds) + Double(c.attoseconds) / 1e18
+    }
+
+    private func compact(_ text: String) -> String {
+        let one = text.replacingOccurrences(of: "\n", with: " ")
+        return String(one.prefix(160))
+    }
+
+    private func escapeJSON(_ text: String) -> String {
+        text.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+    }
+
+    private func isValidationCommand(_ command: String) -> Bool {
+        let lower = command.lowercased()
+        let markers = [
+            "swift build", "swift test", "swiftc ", "xcodebuild",
+            "python3 -m py_compile", "python -m py_compile", "pytest", "python3 -m pytest", "python -m pytest",
+            "node --check", "npm test", "npm run test", "npm run build", "npm run lint",
+            "npx tsc", "npx eslint", "cargo check", "cargo test", "go test", "go vet",
+            "ruby -c", "php -l", "shellcheck "
+        ]
+        return markers.contains(where: lower.contains)
+    }
+
+    private func validateInvocation(name: String, args: [String: String]) throws {
+        func require(_ key: String) throws {
+            guard let value = args[key], !value.isEmpty else {
+                throw CLIError("\(name) requires non-empty \(key)")
+            }
+        }
+
+        switch name {
+        case "list_dir":
+            break
+        case "read_file", "validate_file", "open_file":
+            try require("path")
+        case "open_url":
+            try require("url")
+        case "read_file_range":
+            try require("path")
+            try require("start_line")
+            try require("end_line")
+            guard Self.integralLine(args["start_line"]) != nil,
+                  Self.integralLine(args["end_line"]) != nil else {
+                throw CLIError("read_file_range requires integer start_line and end_line")
+            }
+        case "write_file":
+            try require("path")
+            guard args["content"] != nil else { throw CLIError("write_file requires content") }
+        case "edit_file":
+            try require("path")
+            guard (args["old"] ?? args["oldText"]) != nil, (args["new"] ?? args["newText"]) != nil else {
+                throw CLIError("edit_file requires path, old, new")
+            }
+        case "edit_file_range":
+            try require("path")
+            try require("start_line")
+            try require("end_line")
+            guard Self.integralLine(args["start_line"]) != nil,
+                  Self.integralLine(args["end_line"]) != nil,
+                  args["replacement"] != nil else {
+                throw CLIError("edit_file_range requires integer start_line/end_line and replacement")
+            }
+        case "search":
+            try require("query")
+        case "shell":
+            try require("command")
+        case "git_status", "git_diff", "mcp_servers":
+            break
+        case "mcp_list_tools":
+            try require("server")
+        case "mcp_call":
+            try require("server")
+            try require("tool")
+        default:
+            throw CLIError("unknown tool: \(name)")
+        }
+    }
+}

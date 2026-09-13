@@ -1,0 +1,27 @@
+#!/bin/zsh
+set -euo pipefail
+
+script_dir=${0:A:h}
+binary_path="$script_dir/.build/release/mlxagent"
+bundle_name="mlx-swift_Cmlx.bundle"
+bundle_path="$script_dir/.build/arm64-apple-macosx/release/$bundle_name"
+bundle_source="$script_dir/DerivedData/Build/Products/Release/$bundle_name"
+
+if [[ ! -x "$binary_path" ]]; then
+    print -u2 "SLTA release binary is missing. Run: swift build -c release"
+    exit 1
+fi
+
+if [[ ! -f "$bundle_path/Contents/Resources/default.metallib" ]]; then
+    if [[ ! -f "$bundle_source/Contents/Resources/default.metallib" ]]; then
+        print -u2 "MLX Metal resource bundle is missing: $bundle_name"
+        exit 1
+    fi
+    /bin/cp -R "$bundle_source" "$bundle_path"
+fi
+
+if (( $# == 0 )); then
+    set -- "$script_dir"
+fi
+
+exec "$binary_path" "$@"

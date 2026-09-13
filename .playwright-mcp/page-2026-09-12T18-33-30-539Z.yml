@@ -1,0 +1,516 @@
+- generic [active] [ref=f3e1]:
+  - generic:
+    - generic:
+      - link "მთავარ კონტენტზე გადასვლა" [ref=f3e2] [cursor=pointer]
+      - link "მარტივი წვდომის დახმარება" [ref=f3e3] [cursor=pointer]:
+        - /url: https://support.google.com/websearch/answer/181196?hl=ka
+  - generic [ref=f3e8]:
+    - search [ref=f3e9]:
+      - generic [ref=f3e12]:
+        - link [ref=f3e13] [cursor=pointer]:
+          - /url: https://www.google.com/webhp?hl=ka&ictx=0&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQpYkNegQIBhAG
+          - img "Google-ის მთავარი გვერდის მონახულება" [ref=f3e14]
+        - generic [ref=f3e19]:
+          - combobox "ძიება" [ref=f3e22]: night time Moscow photos night time Moscow photos
+          - generic [ref=f3e23]:
+            - button "გასუფთავება" [ref=f3e25] [cursor=pointer]
+            - generic [ref=f3e30]:
+              - button "შეყვანის ინსტრუმენტები" [ref=f3e31] [cursor=pointer]
+              - button "ხმოვანი ძიება" [ref=f3e35] [cursor=pointer]
+              - button "სურათებით ძიება" [ref=f3e38] [cursor=pointer]
+        - button "ძიება" [ref=f3e41] [cursor=pointer]
+    - generic [ref=f3e46]:
+      - button "პარამეტრები" [ref=f3e48] [cursor=pointer]
+      - button "გაზიარება" [ref=f3e53] [cursor=pointer]
+      - generic [ref=f3e59]:
+        - button "Google აპები" [ref=f3e61] [cursor=pointer]
+        - link "შესვლა" [ref=f3e66] [cursor=pointer]:
+          - /url: https://accounts.google.com/ServiceLogin?hl=ka&passive=true&continue=https://www.google.com/search%3Fq%3Dnight%2520time%2520Moscow%2520photos%26sei%3D95qlavevNu6gwPAP2seioAs&ec=futura_srp_og_si_72236_p
+  - generic [ref=f3e69]:
+    - navigation [ref=f3e75]:
+      - generic [ref=f3e81]:
+        - list [ref=f3e82]:
+          - listitem [ref=f3e83]:
+            - link "ხელოვნური ინტელექტის რეჟიმი" [ref=f3e86] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&udm=50&fbs=ABfTbFWMl9Rjnv85mOvlLDA0XOAugEO37INNtbDZph_3_Y1biNntZKbk2Sv2r47md7ic1bU4uuV5cQMgD-2tY3URiSqCYPr2KQiPVSV4J7ttIQFEGDOmcCpee2_4t14I1IlVWuJqVGo8ldgs6gdJJdYiqCS26mtEUkIyoEmPc4Yna2J6JHTBj_VNs7fGJEHcafMcpBIcTQmGXlr3-jBHznZqcm2ULTtXgawdv56GFt2h5QsOm3USqiImj-2ffGBjxdHRGxxDO8QV&vsint=&aep=1&ntc=1&cs=0&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ2J8OegQIERAD
+          - listitem [ref=f3e90]:
+            - link "ყველაფერი" [disabled] [ref=f3e91]
+          - listitem [ref=f3e94]:
+            - link "სურათები" [ref=f3e95] [cursor=pointer]:
+              - /url: /search?sca_esv=94bd0027b59c007d&udm=2&fbs=ABfTbFWMl9Rjnv85mOvlLDA0XOAugEO37INNtbDZph_3_Y1biNntZKbk2Sv2r47md7ic1bU4uuV5cQMgD-2tY3URiSqCYPr2KQiPVSV4J7ttIQFEGDOmcCpee2_4t14I1IlVWuJqVGo8ldgs6gdJJdYiqCS26mtEUkIyoEmPc4Yna2J6JHTBj_VNs7fGJEHcafMcpBIcTQmGXlr3-jBHznZqcm2ULTtXgawdv56GFt2h5QsOm3USqiImj-2ffGBjxdHRGxxDO8QV&q=night+time+Moscow+photos&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQtKgLegQIFxAB
+          - listitem [ref=f3e98]:
+            - link "ვიდეოები" [ref=f3e99] [cursor=pointer]:
+              - /url: /search?sca_esv=94bd0027b59c007d&udm=7&fbs=ABfTbFWMl9Rjnv85mOvlLDA0XOAugEO37INNtbDZph_3_Y1biNntZKbk2Sv2r47md7ic1bU4uuV5cQMgD-2tY3URiSqCYPr2KQiPVSV4J7ttIQFEGDOmcCpee2_4t14I1IlVWuJqVGo8ldgs6gdJJdYiqCS26mtEUkIyoEmPc4Yna2J6JHTBj_VNs7fGJEHcafMcpBIcTQmGXlr3-jBHznZqcm2ULTtXgawdv56GFt2h5QsOm3USqiImj-2ffGBjxdHRGxxDO8QV&q=night+time+Moscow+photos&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQtKgLegQIExAB
+          - listitem [ref=f3e102]:
+            - link "მოკლე ვიდეოები" [ref=f3e103] [cursor=pointer]:
+              - /url: /search?sca_esv=94bd0027b59c007d&udm=39&fbs=ABfTbFWMl9Rjnv85mOvlLDA0XOAugEO37INNtbDZph_3_Y1biNntZKbk2Sv2r47md7ic1bU4uuV5cQMgD-2tY3URiSqCYPr2KQiPVSV4J7ttIQFEGDOmcCpee2_4t14I1IlVWuJqVGo8ldgs6gdJJdYiqCS26mtEUkIyoEmPc4Yna2J6JHTBj_VNs7fGJEHcafMcpBIcTQmGXlr3-jBHznZqcm2ULTtXgawdv56GFt2h5QsOm3USqiImj-2ffGBjxdHRGxxDO8QV&q=night+time+Moscow+photos&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQs6gLegQIFBAB
+          - listitem [ref=f3e106]:
+            - link "ვები" [ref=f3e107] [cursor=pointer]:
+              - /url: /search?sca_esv=94bd0027b59c007d&udm=web&fbs=ABfTbFWMl9Rjnv85mOvlLDA0XOAugEO37INNtbDZph_3_Y1biNntZKbk2Sv2r47md7ic1bU4uuV5cQMgD-2tY3URiSqCYPr2KQiPVSV4J7ttIQFEGDOmcCpee2_4t14I1IlVWuJqVGo8ldgs6gdJJdYiqCS26mtEUkIyoEmPc4Yna2J6JHTBj_VNs7fGJEHcafMcpBIcTQmGXlr3-jBHznZqcm2ULTtXgawdv56GFt2h5QsOm3USqiImj-2ffGBjxdHRGxxDO8QV&q=night+time+Moscow+photos&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQs6gLegQIFRAB
+          - listitem [ref=f3e110]:
+            - link "წიგნები" [ref=f3e111] [cursor=pointer]:
+              - /url: /search?sca_esv=94bd0027b59c007d&q=night+time+Moscow+photos&udm=36&source=lnms&fbs=ABfTbFWMl9Rjnv85mOvlLDA0XOAugEO37INNtbDZph_3_Y1biNntZKbk2Sv2r47md7ic1bU4uuV5cQMgD-2tY3URiSqCYPr2KQiPVSV4J7ttIQFEGDOmcCpee2_4t14I1IlVWuJqVGo8ldgs6gdJJdYiqCS26mtEUkIyoEmPc4Yna2J6JHTBj_VNs7fGJEHcafMcpBIcTQmGXlr3-jBHznZqcm2ULTtXgawdv56GFt2h5QsOm3USqiImj-2ffGBjxdHRGxxDO8QV&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ0pQJegQIFhAB
+          - listitem [ref=f3e114]:
+            - button [ref=f3e115] [cursor=pointer]:
+              - generic "სხვა ფილტრები" [ref=f3e116]: მეტი
+        - button "ხელსაწყოები" [ref=f3e123] [cursor=pointer]
+    - heading "ძებნის შედეგები" [level=1] [ref=f3e130]
+    - generic [ref=f3e136]:
+      - generic [ref=f3e137]: Looking for results in English?
+      - link [ref=f3e138] [cursor=pointer]:
+        - /url: "#"
+      - link "Change to English" [ref=f3e142] [cursor=pointer]:
+        - /url: /setprefs?sig=0_RXg655ROlCHZlBs3ee_kvbppEg4%3D&source=en_ignored_notification&prev=https://www.google.com/search?q%3Dnight%2Btime%2BMoscow%2Bphotos%26sei%3D95qlavevNu6gwPAP2seioAs&hl=en&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQhoQCKAF6BAgYEAQ
+      - link "ქართული დატოვება" [ref=f3e143] [cursor=pointer]:
+        - /url: "#"
+      - link "ენის პარამეტრები" [ref=f3e145] [cursor=pointer]:
+        - /url: /preferences?lang=1&hl=ka&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQiIQCKAN6BAgYEAY#languages
+    - generic [ref=f3e146]:
+      - generic [ref=f3e154]:
+        - heading "სურათები" [level=2] [ref=f3e158]
+        - generic [ref=f3e163]:
+          - generic [ref=f3e167] [cursor=pointer]:
+            - link "46,408 Moscow City Night Stock Photos - Free & Royalty-Free ... Dreamstime.com" [ref=f3e168]:
+              - /url: /goto?url=CAESdwHrOzAV-3DjPes1bH8gW0sYVgePf4sPzqE2UbZCqt1IytNibcuHW2XTeE6xow3229qUTYi4fma6nTBNcHlkp8dVHUxb_nHJhUAXqiVrtvVUoY62i1bARcyefhgbO86ENkpdYcpjwGWoB_un8kqWIlTAOR69-noM
+            - button [ref=f3e170]:
+              - img "46,408 Moscow City Night Stock Photos - Free & Royalty-Free ..." [ref=f3e172]
+            - generic [ref=f3e174]:
+              - generic [ref=f3e176]: 46,408 Moscow City Night Stock Photos - Free & Royalty-Free ...
+              - generic [ref=f3e177]:
+                - generic [ref=f3e179]: Dreamstime.com
+                - button "ამ შედეგის შესახებ" [ref=f3e189]
+          - generic [ref=f3e197] [cursor=pointer]:
+            - link "34,800+ Moscow Night Stock Photos and Royalty-Free Pictures ... iStock" [ref=f3e198]:
+              - /url: /goto?url=CAESZwHrOzAVoqBh-nnniHE0JIi1UMk7wH3MSgKxS1aQ7z1wnGsdw6bgwm0o4PMvib840l-qp9RWkA_5Fj9QWvtaHN12DcprNRZtXv5IGlwZumkDWChimN5uOAgrKsrVXp34R7OYFFKR_-8
+            - button [ref=f3e200]:
+              - img "34,800+ Moscow Night Stock Photos and Royalty-Free Pictures ..." [ref=f3e202]
+            - generic [ref=f3e204]:
+              - generic [ref=f3e206]: 34,800+ Moscow Night Stock Photos and Royalty-Free Pictures ...
+              - generic [ref=f3e207]:
+                - generic [ref=f3e209]: iStock
+                - button "ამ შედეგის შესახებ" [ref=f3e219]
+          - generic [ref=f3e227] [cursor=pointer]:
+            - link "20,000+ Free Night Moscow & Moscow Images - Pixabay Pixabay" [ref=f3e228]:
+              - /url: /goto?url=CAESaQHrOzAVt_xmDer32MFel4PDxSmAzPc6CETmJB954WH2QCNKrpp0p0zllVmaG9sJfXZNQDpwv82u6mItsGAd_YRLLK0WU13Du9Or3t3D1shhUj_TiX57jIumUHWAh7B7MDCc6u3EIrRIjQ
+            - button [ref=f3e230]:
+              - img "20,000+ Free Night Moscow & Moscow Images - Pixabay" [ref=f3e232]
+            - generic [ref=f3e234]:
+              - generic [ref=f3e236]: 20,000+ Free Night Moscow & Moscow Images - Pixabay
+              - generic [ref=f3e237]:
+                - generic [ref=f3e239]: Pixabay
+                - button "ამ შედეგის შესახებ" [ref=f3e249]
+          - generic [ref=f3e257] [cursor=pointer]:
+            - link "29,800+ Moscow City Night Stock Photos and Royalty-Free ... iStock" [ref=f3e258]:
+              - /url: /goto?url=CAESbAHrOzAVOnkjAh_1EAoXbZFnKpKQ_1s8nvnswymUSqVsMWUVZbBBcErjEN62a9pYrT2eubNzZMyei3T8B37DAsrgySoot2vXdrP8JNLhzPv1Im-QIZGfAkZAJfJyL6zqaeHyOy8ebfpZGbr5GQ
+            - button [ref=f3e260]:
+              - img "29,800+ Moscow City Night Stock Photos and Royalty-Free ..." [ref=f3e262]
+            - generic [ref=f3e264]:
+              - generic [ref=f3e266]: 29,800+ Moscow City Night Stock Photos and Royalty-Free ...
+              - generic [ref=f3e267]:
+                - generic [ref=f3e269]: iStock
+                - button "ამ შედეგის შესახებ" [ref=f3e279]
+          - generic [ref=f3e287] [cursor=pointer]:
+            - link "Moscow Night Pictures | Download Free Images on Unsplash Unsplash" [ref=f3e288]:
+              - /url: /goto?url=CAESYgHrOzAVkBPJb_YggtsJyKGrUwJlFdpB5Z2BbStej077C-zJhiP_Z83BM5ioRLUoGmxw34ipmsb3gjxmWpzN8tBXDe-UMQss87Pi6_0u2nnU-x_x92nXnYL29HQQkava9t9i
+            - button [ref=f3e290]:
+              - img "Moscow Night Pictures | Download Free Images on Unsplash" [ref=f3e292]
+            - generic [ref=f3e294]:
+              - generic [ref=f3e296]: Moscow Night Pictures | Download Free Images on Unsplash
+              - generic [ref=f3e297]:
+                - generic [ref=f3e299]: Unsplash
+                - button "ამ შედეგის შესახებ" [ref=f3e309]
+          - generic [ref=f3e317] [cursor=pointer]:
+            - link "25,624 Cityscape Moscow Night Stock Photos - Free & Royalty ... Dreamstime.com" [ref=f3e318]:
+              - /url: /goto?url=CAESfAHrOzAVqic8TyBg4sxnKB_xRpLcg4yUJmCu5aNH3CBbUEwEPsoEl_eMRnJDBYWjT4YIcXUo0auaW_dE-qQskwGr-NsN_yiknqJNT1O7TPdWbJIpKlCZSV0NxvNw7AWFdz5_GmkvCMxWRslExLUordEiwghS7I4TLkxti5Y
+            - button [ref=f3e320]:
+              - img "25,624 Cityscape Moscow Night Stock Photos - Free & Royalty ..." [ref=f3e322]
+            - generic [ref=f3e324]:
+              - generic [ref=f3e326]: 25,624 Cityscape Moscow Night Stock Photos - Free & Royalty ...
+              - generic [ref=f3e327]:
+                - generic [ref=f3e329]: Dreamstime.com
+                - button "ამ შედეგის შესახებ" [ref=f3e339]
+          - generic [ref=f3e347] [cursor=pointer]:
+            - link "20 PHOTOS of Moscow at night GW2RU" [ref=f3e348]:
+              - /url: /goto?url=CAESbQHrOzAVRtP3_QAJ_Cb0Sp3Hn8PjEyBN6lPezWuZ1ATMgnoliYo2zhaefHlY3lhM29FcoQ74yeJczMplcwlSyxH4PwBV78Pcx_j-w9AKplUL928ShioNKRkC5OZlrtPtAOQkL_3n2KSFhmeDyAo
+            - button [ref=f3e350]:
+              - img "20 PHOTOS of Moscow at night" [ref=f3e352]
+            - generic [ref=f3e354]:
+              - generic [ref=f3e356]: 20 PHOTOS of Moscow at night
+              - generic [ref=f3e357]:
+                - generic [ref=f3e359]: GW2RU
+                - button "ამ შედეგის შესახებ" [ref=f3e369]
+          - generic [ref=f3e378] [cursor=pointer]:
+            - link "Moscow Night\" Images – Browse 279 Stock Photos, Vectors, and ... Adobe Stock" [ref=f3e379]:
+              - /url: /goto?url=CAESawHrOzAVdjxk3WFbbhDk4HetLDqTxZpTc_nK9lCHbDF2KHlU60LZfVlQrsxh0IXshaGctGFfg7PBbUAAZ2oRbgiUboFx7HYv5Tb_q7K0gMYTuSfiXfcnA2_arXMpQ8iX1CJzjgpngF8VbzV7
+            - button [ref=f3e381]:
+              - img "Moscow Night\" Images – Browse 279 Stock Photos, Vectors, and ..." [ref=f3e383]
+            - generic [ref=f3e385]:
+              - generic [ref=f3e387]: Moscow Night" Images – Browse 279 Stock Photos, Vectors, and ...
+              - generic [ref=f3e388]:
+                - generic [ref=f3e390]: Adobe Stock
+                - button "ამ შედეგის შესახებ" [ref=f3e400]
+          - generic [ref=f3e409] [cursor=pointer]:
+            - link "20 PHOTOS of Moscow at night GW2RU" [ref=f3e410]:
+              - /url: /goto?url=CAESbQHrOzAVRtP3_QAJ_Cb0Sp3Hn8PjEyBN6lPezWuZ1ATMgnoliYo2zhaefHlY3lhM29FcoQ74yeJczMplcwlSyxH4PwBV78Pcx_j-w9AKplUL928ShioNKRkC5OZlrtPtAOQkL_3n2KSFhmeDyAo
+            - button [ref=f3e412]:
+              - img "20 PHOTOS of Moscow at night" [ref=f3e414]
+            - generic [ref=f3e416]:
+              - generic [ref=f3e418]: 20 PHOTOS of Moscow at night
+              - generic [ref=f3e419]:
+                - generic [ref=f3e421]: GW2RU
+                - button "ამ შედეგის შესახებ" [ref=f3e431]
+          - generic [ref=f3e440] [cursor=pointer]:
+            - link "51,281 Moscow Streets Night Royalty-Free Images, Stock ... Shutterstock" [ref=f3e441]:
+              - /url: /goto?url=CAEScAHrOzAVhTR1e7uSvm3Z2S6umUyyFFlQstpa9KwQj3IK0TZpvnwBRZg4ZkJ8m-4_6Nn_xgHRkeuQgDhdvayDVEXEClMWykxrGQy_ID5Rf8_8sm5rPhxYT4fGkUvHcT5VIiprFYFN-aUFYRnUNf-H-vQ
+            - button [ref=f3e443]:
+              - img "51,281 Moscow Streets Night Royalty-Free Images, Stock ..." [ref=f3e445]
+            - generic [ref=f3e447]:
+              - generic [ref=f3e449]: 51,281 Moscow Streets Night Royalty-Free Images, Stock ...
+              - generic [ref=f3e450]:
+                - generic [ref=f3e452]: Shutterstock
+                - button "ამ შედეგის შესახებ" [ref=f3e462]
+        - button "სხვა გამოსახულებების ჩვენება" [ref=f3e468] [cursor=pointer]:
+          - separator [aria-hidden] [ref=f3e469]
+      - main [ref=f3e475]:
+        - generic [ref=f3e479]:
+          - generic [ref=f3e482]:
+            - heading "Web results" [level=2] [ref=f3e483]
+            - generic [ref=f3e484]:
+              - generic [ref=f3e487]:
+                - link "Moscow Night Stock Photos iStock https://www.istockphoto.com › ..." [ref=f3e489] [cursor=pointer]:
+                  - /url: /goto?url=CAESZwHrOzAVoqBh-nnniHE0JIi1UMk7wH3MSgKxS1aQ7z1wnGsdw6bgwm0o4PMvib840l-qp9RWkA_5Fj9QWvtaHN12DcprNRZtXv5IGlwZumkDWChimN5uOAgrKsrVXp34R7OYFFKR_-8
+                  - heading "Moscow Night Stock Photos" [level=3] [ref=f3e490]
+                  - generic [ref=f3e496]:
+                    - generic [ref=f3e497]: iStock
+                    - generic [ref=f3e499]: https://www.istockphoto.com › ...
+                - generic [ref=f3e501]:
+                  - generic [ref=f3e502]: ·
+                  - link "გადათარგმნეთ ეს გვერდი" [ref=f3e503] [cursor=pointer]:
+                    - /url: /goto?url=CAESsAEB6zswFXgmXAw7Cvk39WXfQ89jBvuG_1wRaS4YBm_RJhKLGe71asPbyZc0UimQpbK5nXZMaj4YBOrkpxBv4-0P0yUA_hairXGm3_JikqoKzSnHEfVS1e2mr3pBFnFkXT05MZEundHiHibDazl33CXbGYhBFuB5Tthe3we4TPk_sDgHXxRDl7gQfxs82bjC5puNEe0l9vtn81ORZ22vpRArwPnwz2Fhh98zQkqY7ZM_tg
+                - button "ამ შედეგის შესახებ" [ref=f3e508] [cursor=pointer]
+              - generic [ref=f3e515]:
+                - emphasis [ref=f3e516]: Search from 34817 Moscow Night stock photos
+                - text: ", pictures and royalty-free images from iStock. Get iStock exclusive photos, illustrations, and more."
+              - 'link "სურათები „night time Moscow photos“ (წყარო: www.istockphoto.com)" [ref=f3e518] [cursor=pointer]':
+                - /url: /goto?url=CAESZwHrOzAVoqBh-nnniHE0JIi1UMk7wH3MSgKxS1aQ7z1wnGsdw6bgwm0o4PMvib840l-qp9RWkA_5Fj9QWvtaHN12DcprNRZtXv5IGlwZumkDWChimN5uOAgrKsrVXp34R7OYFFKR_-8
+          - generic [ref=f3e530]:
+            - generic [ref=f3e533]:
+              - link "Moscow Night Stock Photos Getty Images https://www.gettyimages.com › ..." [ref=f3e535] [cursor=pointer]:
+                - /url: /goto?url=CAESZwHrOzAVi2StD9c5tfMtVzJlHcYPA4Kjw6yIxODoy0i_1-Xz7fXdK9tsrkPb9d8vvy7Bb7OEWbc0x4EyQszwUpOuxcp7nWmGK7GH684xDVv0l5Ctwh4GOc3nhEnbCixgLvmgrsn34Vg
+                - heading "Moscow Night Stock Photos" [level=3] [ref=f3e536]
+                - generic [ref=f3e542]:
+                  - generic [ref=f3e543]: Getty Images
+                  - generic [ref=f3e545]: https://www.gettyimages.com › ...
+              - generic [ref=f3e547]:
+                - generic [ref=f3e548]: ·
+                - link "გადათარგმნეთ ეს გვერდი" [ref=f3e549] [cursor=pointer]:
+                  - /url: /goto?url=CAESsAEB6zswFUXNJTIBKtltUVddpM5AMyZ42IH7OoZrozd487DFi88fJ19Tf-b8pJmLW92diXe0EcTMrbfwAzNpk8CyWLzzmxY1iOb4ALjaBLfOwiyTSGw0hRWBbJRuOJl_1rWRhPjesouMyjB4madRABMRCnkuHDm2UIcMITZp6HSaUD7A4Ssm6q3rDQRrKTlNBVNXYeUxTW_FE2Fe4ArMjVk_URtY-0cvN21amXgkzBq8yA
+              - button "ამ შედეგის შესახებ" [ref=f3e554] [cursor=pointer]
+            - generic [ref=f3e561]:
+              - emphasis [ref=f3e562]: Browse 15,615 moscow night photos and images
+              - text: available, or search for moscow night roof view to find more great photos and pictures. Photos; Video.
+            - 'link "სურათები „night time Moscow photos“ (წყარო: www.gettyimages.com)" [ref=f3e564] [cursor=pointer]':
+              - /url: /goto?url=CAESZwHrOzAVi2StD9c5tfMtVzJlHcYPA4Kjw6yIxODoy0i_1-Xz7fXdK9tsrkPb9d8vvy7Bb7OEWbc0x4EyQszwUpOuxcp7nWmGK7GH684xDVv0l5Ctwh4GOc3nhEnbCixgLvmgrsn34Vg
+          - generic [ref=f3e583]:
+            - generic [ref=f3e585]:
+              - heading "AI მიმოხილვა" [level=2] [ref=f3e591]
+              - generic [ref=f3e614]:
+                - generic [ref=f3e615]:
+                  - button [ref=f3e618]:
+                    - img "20 PHOTOS of Moscow at night" [ref=f3e619]
+                  - text: You can view large collections of illuminated night photography and browse high-resolution galleries on platforms like
+                  - link "Getty Images" [ref=f3e621] [cursor=pointer]:
+                    - /url: /goto?url=CAESZwHrOzAVW74EDT1dbxKRYdFnWVXve0i1ptvgKWF0D0B0wk0-l2zcsp2Pwzlw5lSy8i3L2IuQrw-zCiZ8TaYyG5AlfHzqoZ0sQLPmGBEo9bNJYCOqxj4JkXHs5JO8K1n6q8O8J4T9eCI
+                  - text: .
+                  - button "დაკავშირებული შედეგები" [ref=f3e624] [cursor=pointer]
+                - heading "Popular Night Photography Spots in Moscow" [level=3] [ref=f3e629]
+                - list [ref=f3e630]:
+                  - listitem [ref=f3e632]:
+                    - generic [ref=f3e633]:
+                      - strong [ref=f3e634]: "Red Square:"
+                      - text: Features glowing red brick Kremlin walls, illuminated towers, and the brightly lit St. Basil's Cathedral.
+                  - listitem [ref=f3e636]:
+                    - generic [ref=f3e637]:
+                      - strong [ref=f3e638]: "Moscow-City:"
+                      - text: The modern financial district offers futuristic shots of neon-lit skyscrapers reflecting in the Moskva River.
+                  - listitem [ref=f3e640]:
+                    - generic [ref=f3e641]:
+                      - strong [ref=f3e642]: "Sparrow Hills (Vorobyovy Gory):"
+                      - text: Provides a high vantage point for panoramic night views of the city skyline.
+                  - listitem [ref=f3e644]:
+                    - generic [ref=f3e645]:
+                      - strong [ref=f3e646]: "Zaryadye Park:"
+                      - text: Famous for the floating bridge overlooking the illuminated riverbanks and historic center.
+                    - generic [ref=f3e648]:
+                      - link [ref=f3e1135] [cursor=pointer]:
+                        - /url: /goto?url=CAESbQHrOzAVQ4XHRNAGn12Iy_3rdSXI97oFfQ6WvKqgsjf-wEWLswnbcIyXqJWzFQ6pxDPn6VRWMqCH3q9-QUjypFx09SJNJ8Zk2namWFFdfzR2nnAS3etQue-qGtb9j9v9hFjuZt1tpMzwxVzO3BI
+                      - button [ref=f3e1136] [cursor=pointer]:
+                        - generic [ref=f3e652]:
+                          - generic [ref=f3e653]: Getty Images
+                          - generic [ref=f3e654]: "+4"
+                - generic [ref=f3e1138]:
+                  - generic [ref=f3e1139]: "If you're looking for specific types of photos, tell me:"
+                  - list [ref=f3e1140]:
+                    - listitem [ref=f3e1141]:
+                      - generic [ref=f3e1142]:
+                        - text: Are you looking for
+                        - strong [ref=f3e1143]: historic landmarks
+                        - text: (like the Kremlin) or
+                        - strong [ref=f3e1144]: modern skyscrapers
+                        - text: (like Moscow-City)?
+                    - listitem [ref=f3e1145]:
+                      - generic [ref=f3e1146]:
+                        - text: Do you need them for a
+                        - strong [ref=f3e1147]: personal project, travel planning, or desktop wallpapers
+                        - text: "?"
+                - generic [ref=f3e1152]:
+                  - list [ref=f3e1153]:
+                    - listitem [ref=f3e1154]:
+                      - generic [ref=f3e1155]:
+                        - link "15,591 Moscow Night Stock Photos, High-Res Pictures, and Images. გაიხსნება ახალ ჩანართში." [ref=f3e1156] [cursor=pointer]:
+                          - /url: /goto?url=CAESZwHrOzAVW74EDT1dbxKRYdFnWVXve0i1ptvgKWF0D0B0wk0-l2zcsp2Pwzlw5lSy8i3L2IuQrw-zCiZ8TaYyG5AlfHzqoZ0sQLPmGBEo9bNJYCOqxj4JkXHs5JO8K1n6q8O8J4T9eCI
+                        - generic [ref=f3e1157]:
+                          - generic [ref=f3e1158]:
+                            - generic [ref=f3e1161]: Getty Images
+                            - button "ამ შედეგის შესახებ" [ref=f3e1165] [cursor=pointer]
+                          - generic [ref=f3e1171]:
+                            - generic [aria-hidden] [ref=f3e1172]: 15,591 Moscow Night Stock Photos, High-Res Pictures, and Images
+                            - generic [ref=f3e1173]: "There are many photos and images of Moscow at night, including: * Illuminated Kremlin wall and State Historical Museum in Red Squa..."
+                    - listitem [ref=f3e1176]:
+                      - generic [ref=f3e1177]:
+                        - link "Moscow Night Scene Stock Photos - Getty Images. გაიხსნება ახალ ჩანართში." [ref=f3e1178] [cursor=pointer]:
+                          - /url: /goto?url=CAESbQHrOzAVQ4XHRNAGn12Iy_3rdSXI97oFfQ6WvKqgsjf-wEWLswnbcIyXqJWzFQ6pxDPn6VRWMqCH3q9-QUjypFx09SJNJ8Zk2namWFFdfzR2nnAS3etQue-qGtb9j9v9hFjuZt1tpMzwxVzO3BI
+                        - generic [ref=f3e1179]:
+                          - generic [ref=f3e1180]:
+                            - generic [ref=f3e1183]: Getty Images
+                            - button "ამ შედეგის შესახებ" [ref=f3e1187] [cursor=pointer]
+                          - generic [ref=f3e1193]:
+                            - generic [aria-hidden] [ref=f3e1194]: Moscow Night Scene Stock Photos - Getty Images
+                            - generic [ref=f3e1195]: Browse 11,720 moscow night scene photos and images available, or start a new search to explore more photos and images. ... A wet e...
+                    - listitem [ref=f3e1198]:
+                      - generic [ref=f3e1199]:
+                        - link "Moscow Night royalty-free images - Shutterstock. გაიხსნება ახალ ჩანართში." [ref=f3e1200] [cursor=pointer]:
+                          - /url: /goto?url=CAESaAHrOzAVjlfxkqexWudTDriWMuV49QFr3yuPBnyM9WZNV-cLFSsu4Uw-1hnIgGjyzNYGm_n4C-BCMteE93fHJky2DDqqNjCMoYoh3h4CAhfdyTFakYt-7o4rfhwrjrCBWl3eq2M48nDk
+                        - generic [ref=f3e1201]:
+                          - generic [ref=f3e1202]:
+                            - generic [ref=f3e1205]: Shutterstock
+                            - button "ამ შედეგის შესახებ" [ref=f3e1209] [cursor=pointer]
+                          - generic [ref=f3e1215]:
+                            - generic [aria-hidden] [ref=f3e1216]: Moscow Night royalty-free images - Shutterstock
+                            - generic [ref=f3e1217]: Russia, Moscow, 20 sept 2024. Evening city traffic jam with a modern bus in the foreground. Blurred background of cars and city li...
+                    - listitem [ref=f3e1220]:
+                      - generic [ref=f3e1221]:
+                        - link "Moscow City Night royalty-free images - Shutterstock. გაიხსნება ახალ ჩანართში." [ref=f3e1222] [cursor=pointer]:
+                          - /url: /goto?url=CAESbQHrOzAVcAsa1hJ1q36FSL4LzEY1GSvgSqwm3SHP89U3bO1W7i9aKroMIH1J8W32RquuIIojZlAuwF6Ss-qjBPtpQVsPa6ex1ZH4U-GRVcvhquMr00RPlurXxTJCtgClkOdBOiMWPIUgaEgNkEY
+                        - generic [ref=f3e1223]:
+                          - generic [ref=f3e1224]:
+                            - generic [ref=f3e1227]: Shutterstock
+                            - button "ამ შედეგის შესახებ" [ref=f3e1231] [cursor=pointer]
+                          - generic [ref=f3e1237]:
+                            - generic [aria-hidden] [ref=f3e1238]: Moscow City Night royalty-free images - Shutterstock
+                            - generic [ref=f3e1239]: Night view of Moscow Kremlin fortified complex, the residence of the president of the Russian Federation, Moscow, Russia, spring. ...
+                    - listitem [ref=f3e1242]:
+                      - generic [ref=f3e1243]:
+                        - link "97 Moscow Skyline Night Stock Photos and High-Res Images. გაიხსნება ახალ ჩანართში." [ref=f3e1244] [cursor=pointer]:
+                          - /url: /goto?url=CAEScQHrOzAVngy6BF4dKYRIPK_2dJyW85kvipbId2zTdR15onwjl7QLoMQMd0-W-WmgzUpHIqpAC93r1j3Br_apxmBCi2k1cKHl8pboTvd_CXi46SwoGyrOThUXkkoQaSHIyxsFqRwrjeWqnro8A2qBvvGr
+                        - generic [ref=f3e1245]:
+                          - generic [ref=f3e1246]:
+                            - generic [ref=f3e1249]: Getty Images
+                            - button "ამ შედეგის შესახებ" [ref=f3e1253] [cursor=pointer]
+                          - generic [ref=f3e1259]:
+                            - generic [aria-hidden] [ref=f3e1260]: 97 Moscow Skyline Night Stock Photos and High-Res Images
+                            - generic [ref=f3e1261]: Browse 97 moscow skyline night photos and images available, or start a new search to explore more photos and images. ... City skyl...
+                  - button "Next" [ref=f3e1264] [cursor=pointer]
+            - button "მეტი AI მიმოხილვის ჩვენება" [ref=f3e669]:
+              - generic [ref=f3e670] [cursor=pointer]: მეტის ჩვენება
+          - generic [ref=f3e679]:
+            - heading "Web results" [level=2] [ref=f3e680]
+            - generic [ref=f3e681]:
+              - generic [ref=f3e684]:
+                - link "Moscow Night Pictures | Download Free Images on Unsplash Unsplash https://unsplash.com › ..." [ref=f3e686] [cursor=pointer]:
+                  - /url: /goto?url=CAESYgHrOzAVkBPJb_YggtsJyKGrUwJlFdpB5Z2BbStej077C-zJhiP_Z83BM5ioRLUoGmxw34ipmsb3gjxmWpzN8tBXDe-UMQss87Pi6_0u2nnU-x_x92nXnYL29HQQkava9t9i
+                  - heading "Moscow Night Pictures | Download Free Images on Unsplash" [level=3] [ref=f3e687]
+                  - generic [ref=f3e693]:
+                    - generic [ref=f3e694]: Unsplash
+                    - generic [ref=f3e696]: https://unsplash.com › ...
+                - generic [ref=f3e698]:
+                  - generic [ref=f3e699]: ·
+                  - link "გადათარგმნეთ ეს გვერდი" [ref=f3e700] [cursor=pointer]:
+                    - /url: /goto?url=CAESqwEB6zswFfDaCZ4Un-nJO8G9fSjN0wD-1iJpGchJsVHG8lLwuvg8BNfuwVAlnhpyXf-EgTh1wkLKPjIfGzImj-6VCnZYkkH2WR-XWoN4n8GiR_sOgrZWD1qKOAqoOf7THA9n-6XkVY0tShNXtn-Zyyaw_gXsFA0-YyRr5hwi4tiqSUZvzdIqHkJxK0lcrWF4i2CVDGgoMmKvTSfNYpLhv-FE7VqdOLrJfTGPa8U
+                - button "ამ შედეგის შესახებ" [ref=f3e705] [cursor=pointer]
+              - generic [ref=f3e712]:
+                - emphasis [ref=f3e713]: Download the perfect moscow night pictures
+                - text: . Find over 100+ of the best free moscow night images. Free for commercial use ✓ No attribution required ...
+              - 'link "სურათები „night time Moscow photos“ (წყარო: unsplash.com)" [ref=f3e715] [cursor=pointer]':
+                - /url: /goto?url=CAESYgHrOzAVkBPJb_YggtsJyKGrUwJlFdpB5Z2BbStej077C-zJhiP_Z83BM5ioRLUoGmxw34ipmsb3gjxmWpzN8tBXDe-UMQss87Pi6_0u2nnU-x_x92nXnYL29HQQkava9t9i
+          - generic [ref=f3e727]:
+            - generic [ref=f3e730]:
+              - link "Moscow Russia at Night Pinterest https://www.pinterest.com › ..." [ref=f3e732] [cursor=pointer]:
+                - /url: /goto?url=CAESfAHrOzAV_Fe5URbGKpimuboJvuEEDpqvW8P_dKr_s3GWB82Q_7tY5jIiFCPmPQXsjnHYc3vu65sGQOOME-KYTXB3cM2SiLfeGcY1Uz2r004joNPgRvZbpq9uOVgTMOtWtY0EqOVyPJGCCrEfbaSxC1G6ebFRagbxjf49Xig
+                - heading "Moscow Russia at Night" [level=3] [ref=f3e733]
+                - generic [ref=f3e739]:
+                  - generic [ref=f3e740]: Pinterest
+                  - generic [ref=f3e742]: https://www.pinterest.com › ...
+              - generic [ref=f3e744]:
+                - generic [ref=f3e745]: ·
+                - link "გადათარგმნეთ ეს გვერდი" [ref=f3e746] [cursor=pointer]:
+                  - /url: /goto?url=CAESxgEB6zswFUOS2rqwbPTf3PRuFNr6crfVIGLYchg1_qdjFoFxg8AmW_cnrUcYY8LVWRI7YRB6kBx1jTjimJ2_4pXwoTZkGGe4GQCk5HceGGLN7Q7xWgjf-W_LJtjLcsJXLPDnZP4n6zeI0GEOZyrUV9ojK1O7uyXR43RDwmBTlhyGgYwk_ORkZ7QB75z56Nr5wDanI8o9LkaR82Bak8pG3WtDZ18P_03ndKubrzv9MM9OodvxjvPiZqoiXv7MnTRMyKaQpzcrayU
+              - button "ამ შედეგის შესახებ" [ref=f3e751] [cursor=pointer]
+            - generic [ref=f3e758]:
+              - text: Discover Pinterest's best ideas and inspiration for
+              - emphasis [ref=f3e759]: Moscow russia at night
+              - text: . Get inspired and try out new things. 52 people searched this.
+            - 'link "სურათები „night time Moscow photos“ (წყარო: www.pinterest.com)" [ref=f3e761] [cursor=pointer]':
+              - /url: /goto?url=CAESfAHrOzAV_Fe5URbGKpimuboJvuEEDpqvW8P_dKr_s3GWB82Q_7tY5jIiFCPmPQXsjnHYc3vu65sGQOOME-KYTXB3cM2SiLfeGcY1Uz2r004joNPgRvZbpq9uOVgTMOtWtY0EqOVyPJGCCrEfbaSxC1G6ebFRagbxjf49Xig
+          - generic [ref=f3e778]:
+            - generic [ref=f3e781]:
+              - link "20 PHOTOS of Moscow at night Gateway to Russia https://www.gw2ru.com › ..." [ref=f3e783] [cursor=pointer]:
+                - /url: /goto?url=CAESbQHrOzAVRtP3_QAJ_Cb0Sp3Hn8PjEyBN6lPezWuZ1ATMgnoliYo2zhaefHlY3lhM29FcoQ74yeJczMplcwlSyxH4PwBV78Pcx_j-w9AKplUL928ShioNKRkC5OZlrtPtAOQkL_3n2KSFhmeDyAo
+                - heading "20 PHOTOS of Moscow at night" [level=3] [ref=f3e784]
+                - generic [ref=f3e790]:
+                  - generic [ref=f3e791]: Gateway to Russia
+                  - generic [ref=f3e793]: https://www.gw2ru.com › ...
+              - generic [ref=f3e795]:
+                - generic [ref=f3e796]: ·
+                - link "გადათარგმნეთ ეს გვერდი" [ref=f3e797] [cursor=pointer]:
+                  - /url: /goto?url=CAEStgEB6zswFZ7MN3JPvFB8v5Wsau1fbBNvCUo6YGhGO4ao2H-cdGwPQjsI0TvkQZqpLWKY9hY03qxxTkLB8F1BGa83yLs-biowHySX-ouvwNF1zSVDpxMm13tMH3zZpvgiW4veVzwvAebQe1MSPOrd3OarjcqFzB6BmkvEYgSn-p9HDc86TblILXlmkgWNVGqnZ14P_bGnElndxWmZQ-n7nH2LgriNmZf2J5HoPmorBQJfkVIfyVpLRw
+              - button "ამ შედეგის შესახებ" [ref=f3e802] [cursor=pointer]
+            - generic [ref=f3e809]:
+              - text: 20 PHOTOS of Moscow at night ·
+              - emphasis [ref=f3e810]: 1. A Moscow Kremlin star
+              - text: · 2. The Moscow Kremlin and St. Basil Cathedral · 3. The Andreevsky Bridge over Moskva River, part of the ...
+            - link [aria-hidden] [ref=f3e813] [cursor=pointer]:
+              - /url: /goto?url=CAESbQHrOzAVRtP3_QAJ_Cb0Sp3Hn8PjEyBN6lPezWuZ1ATMgnoliYo2zhaefHlY3lhM29FcoQ74yeJczMplcwlSyxH4PwBV78Pcx_j-w9AKplUL928ShioNKRkC5OZlrtPtAOQkL_3n2KSFhmeDyAo
+          - generic [ref=f3e820]:
+            - heading "ადამიანები ასევე კითხულობენ" [level=2] [ref=f3e822]
+            - generic [ref=f3e823]:
+              - button "Is Moscow good for nightlife?" [ref=f3e829] [cursor=pointer]
+              - button "Can I take pictures in Russia?" [ref=f3e843] [cursor=pointer]
+              - button "What does Russia look like at night?" [ref=f3e857] [cursor=pointer]
+              - button "What is the most beautiful street in Moscow?" [ref=f3e871] [cursor=pointer]
+          - generic [ref=f3e881]:
+            - heading "Web results" [level=2] [ref=f3e882]
+            - generic [ref=f3e883]:
+              - generic [ref=f3e886]:
+                - link "\"Moscow Night\" Images – Browse 279 ... Adobe Stock https://stock.adobe.com › ..." [ref=f3e888] [cursor=pointer]:
+                  - /url: /goto?url=CAESawHrOzAVdjxk3WFbbhDk4HetLDqTxZpTc_nK9lCHbDF2KHlU60LZfVlQrsxh0IXshaGctGFfg7PBbUAAZ2oRbgiUboFx7HYv5Tb_q7K0gMYTuSfiXfcnA2_arXMpQ8iX1CJzjgpngF8VbzV7
+                  - heading "\"Moscow Night\" Images – Browse 279 ..." [level=3] [ref=f3e889]
+                  - generic [ref=f3e895]:
+                    - generic [ref=f3e896]: Adobe Stock
+                    - generic [ref=f3e898]: https://stock.adobe.com › ...
+                - generic [ref=f3e900]:
+                  - generic [ref=f3e901]: ·
+                  - link "გადათარგმნეთ ეს გვერდი" [ref=f3e902] [cursor=pointer]:
+                    - /url: /goto?url=CAESvQEB6zswFahFn8UOCqI6z4FrX6ORpZyMiYiK9s9iDjfyoecofZmYUrfF2ZSI9oZancGT_vuuPuRcKSy9WUh_DqmRjme6TEv95DMDU9GXJ7MXwAW2ryv_np0apuHIWHXMh6bRM207hz98q4eQXt-cic8TsS7vdyHIgWSZhjIQFgptfk91t3A0_7FnSlYM9qLQAuSiRcZIQLgxwYB9KHheNYgLiDSc4HGj0Pwk9Fa8jxN4HF9elHd3MkoV6Gmwb9M
+                - button "ამ შედეგის შესახებ" [ref=f3e907] [cursor=pointer]
+              - generic [ref=f3e914]:
+                - emphasis [ref=f3e915]: Search from thousands of royalty-free "Moscow Night" stock images
+                - text: and video for your next project. Download royalty-free stock photos, vectors, ...
+              - 'link "სურათები „night time Moscow photos“ (წყარო: stock.adobe.com)" [ref=f3e917] [cursor=pointer]':
+                - /url: /goto?url=CAESawHrOzAVdjxk3WFbbhDk4HetLDqTxZpTc_nK9lCHbDF2KHlU60LZfVlQrsxh0IXshaGctGFfg7PBbUAAZ2oRbgiUboFx7HYv5Tb_q7K0gMYTuSfiXfcnA2_arXMpQ8iX1CJzjgpngF8VbzV7
+          - generic [ref=f3e929]:
+            - generic [ref=f3e932]:
+              - link "Moscow Nightlife Stock Photos Getty Images https://www.gettyimages.com › ..." [ref=f3e934] [cursor=pointer]:
+                - /url: /goto?url=CAESawHrOzAV8gF_rXvW1pVZiTSw19Lxfiw1yMSAM0m4FDLlkoxr6E7VAv70O-IGAN174vgwmROUlYmReuyXa13mpnfDuoaPt5fyj_Gp6VyzgZfzose6EpEz-g_SOlr54gAqlLXB0tBlpkWPtEO_
+                - heading "Moscow Nightlife Stock Photos" [level=3] [ref=f3e935]
+                - generic [ref=f3e941]:
+                  - generic [ref=f3e942]: Getty Images
+                  - generic [ref=f3e944]: https://www.gettyimages.com › ...
+              - generic [ref=f3e946]:
+                - generic [ref=f3e947]: ·
+                - link "გადათარგმნეთ ეს გვერდი" [ref=f3e948] [cursor=pointer]:
+                  - /url: /goto?url=CAEStAEB6zswFb4odheevw1d0WggpMxCubycEmPNR9ex2WLk2j5Y8uBJEzDnVu8mq8p-Y1JEtQHEuMC4y-TEuig1jZLwZkhW4OMisxO-FR5YvF7dNKMyrMB_9HJdqGI7aKvYLkfy49hekH_osfBH94ELJ0qUe9Nxla6Y_BBk0iSQVbSoAgGVrkvP4pr1cB5fttUK1o5oYQUl-Z8ICX3G18F8jxR-DTGb4S0UrZpUFnbcf67LhkH_Q9M
+              - button "ამ შედეგის შესახებ" [ref=f3e953] [cursor=pointer]
+            - generic [ref=f3e960]:
+              - emphasis [ref=f3e961]: Explore Authentic Moscow Nightlife Stock Photos
+              - text: "& Images For Your Project Or Campaign. Less Searching, More Finding With Getty Images."
+            - 'link "სურათები „night time Moscow photos“ (წყარო: www.gettyimages.com)" [ref=f3e963] [cursor=pointer]':
+              - /url: /goto?url=CAESawHrOzAV8gF_rXvW1pVZiTSw19Lxfiw1yMSAM0m4FDLlkoxr6E7VAv70O-IGAN174vgwmROUlYmReuyXa13mpnfDuoaPt5fyj_Gp6VyzgZfzose6EpEz-g_SOlr54gAqlLXB0tBlpkWPtEO_
+          - generic [ref=f3e975]:
+            - generic [ref=f3e978]:
+              - link "Moscow at Night Aesthetic Pinterest https://www.pinterest.com › ..." [ref=f3e980] [cursor=pointer]:
+                - /url: /goto?url=CAESfwHrOzAVeFTLpr-a3vwYuT1M7NLDhowYml9ihfwF539MAt3zYAMCrtRnw7T5vZIcss5l9kdmmFM_fiIAx1oFwfq1j6uZ2MuEbUoUthPfZt4xmL4LL_wEzw5DyL4wuOzMlbi-SjzqCKgp9QUSCL9F7yphaH1sHyhEIeGR_wukOYc
+                - heading "Moscow at Night Aesthetic" [level=3] [ref=f3e981]
+                - generic [ref=f3e987]:
+                  - generic [ref=f3e988]: Pinterest
+                  - generic [ref=f3e990]: https://www.pinterest.com › ...
+              - generic [ref=f3e992]:
+                - generic [ref=f3e993]: ·
+                - link "გადათარგმნეთ ეს გვერდი" [ref=f3e994] [cursor=pointer]:
+                  - /url: /goto?url=CAESyQEB6zswFYepo-my2FJpR7ZYetpYDgLFCR679hZRLfdbnVvens6LoqBwnszxdY4S0d9Klb3KLd908t0ThVIL-5bN-G_5cSGyG2nQmjY1-s-yHd4F4ohfPfwZquDYgPZeF_9PkrbKJkDwxOMBm1vhmzerAF_dWj9YhzZLYmUHLQdi2-oFueZeKI1jJSpWT072okJXQPN4XpdHx-4o3eEAnyaaSEF5qKnxyLiefLEfYH8Ksa1lmgmCmetakugY51JVNQLKU1VdIot9CIs
+              - button "ამ შედეგის შესახებ" [ref=f3e999] [cursor=pointer]
+            - generic [ref=f3e1006]:
+              - text: Discover Pinterest's best ideas and inspiration for
+              - emphasis [ref=f3e1007]: Moscow at night aesthetic
+              - text: . Get inspired and try out new things. 122 people searched this.
+            - link [aria-hidden] [ref=f3e1010] [cursor=pointer]:
+              - /url: /goto?url=CAESfwHrOzAVeFTLpr-a3vwYuT1M7NLDhowYml9ihfwF539MAt3zYAMCrtRnw7T5vZIcss5l9kdmmFM_fiIAx1oFwfq1j6uZ2MuEbUoUthPfZt4xmL4LL_wEzw5DyL4wuOzMlbi-SjzqCKgp9QUSCL9F7yphaH1sHyhEIeGR_wukOYc
+        - generic [ref=f3e1014]:
+          - generic [ref=f3e1019]:
+            - heading "სხვები ეძებდნენ" [level=2] [ref=f3e1021]
+            - generic [ref=f3e1023]:
+              - generic [ref=f3e1024]:
+                - link "Russia at night from space" [ref=f3e1028] [cursor=pointer]:
+                  - /url: /search?sca_esv=94bd0027b59c007d&q=Russia+at+night+from+space&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ1QJ6BAgnEAE
+                - link "Moscow at night from space" [ref=f3e1042] [cursor=pointer]:
+                  - /url: /search?sca_esv=94bd0027b59c007d&q=Moscow+at+night+from+space&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ1QJ6BAgsEAE
+              - generic [ref=f3e1053]:
+                - link "Moscow night life" [ref=f3e1057] [cursor=pointer]:
+                  - /url: /search?sca_esv=94bd0027b59c007d&q=Moscow+night+life&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ1QJ6BAgqEAE
+                - link "Moscow Night Flavour" [ref=f3e1071] [cursor=pointer]:
+                  - /url: /search?sca_esv=94bd0027b59c007d&q=Moscow+Night+Flavour&sa=X&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ1QJ6BAgpEAE
+          - navigation [ref=f3e1082]:
+            - heading "გვერდებში ნავიგაცია" [level=1] [ref=f3e1083]
+            - text: "1"
+            - link "Page 2" [ref=f3e1086] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=10&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAE
+              - text: "2"
+            - link "Page 3" [ref=f3e1088] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=20&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAG
+              - text: "3"
+            - link "Page 4" [ref=f3e1090] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=30&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAI
+              - text: "4"
+            - link "Page 5" [ref=f3e1092] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=40&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAK
+              - text: "5"
+            - link "Page 6" [ref=f3e1094] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=50&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAM
+              - text: "6"
+            - link "Page 7" [ref=f3e1096] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=60&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAO
+              - text: "7"
+            - link "Page 8" [ref=f3e1098] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=70&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAQ
+              - text: "8"
+            - link "Page 9" [ref=f3e1100] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=80&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAS
+              - text: "9"
+            - link "Page 10" [ref=f3e1102] [cursor=pointer]:
+              - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=90&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8tMDegQIUBAU
+              - text: "10"
+            - heading [level=2] [ref=f3e1104]:
+              - link "წინ >" [ref=f3e1105] [cursor=pointer]:
+                - /url: /search?q=night+time+Moscow+photos&sca_esv=94bd0027b59c007d&ei=-Jqlar_lAv7OwPAP3uetiQw&start=10&sa=N&sstk=AS6-VmLoxzDly7qO0yrHlbMVWnNz4b-vIwwU1cb4E_uieGnek09ojYUrW7piUG6P20cx8VqvoPgNP9St0Qov8gPSZs1xLcUFqUpHnA&ved=2ahUKEwi_wY3_1umWAxV-JxAIHd5zK8EQ8NMDegQIUBAW
+        - navigation
+    - contentinfo [ref=f3e1108]:
+      - heading "ბმულებიანი ქვედა კოლონტიტული" [level=1] [ref=f3e1109]
+      - generic [ref=f3e1113]:
+        - generic [ref=f3e1115]:
+          - text: საქართველო
+          - generic [ref=f3e1117]:
+            - button "საქართველო - თქვენი IP მისამართიდან" [ref=f3e1119] [cursor=pointer]:
+              - generic [ref=f3e1120]: საქართველო
+              - generic [ref=f3e1122]:
+                - text: "-"
+                - generic [ref=f3e1123]: თქვენი IP მისამართიდან
+            - text: "-"
+            - button "მდებარეობის განახლება" [ref=f3e1125] [cursor=pointer]
+        - generic [ref=f3e1128]:
+          - link "დახმარება" [ref=f3e1129] [cursor=pointer]:
+            - /url: https://support.google.com/websearch/?p=ws_results_help&hl=ka&fg=1
+          - button "გამოხმაურება" [ref=f3e1131] [cursor=pointer]
+          - link "კონფიდენციალური" [ref=f3e1133] [cursor=pointer]:
+            - /url: https://policies.google.com/privacy?hl=ka&fg=1
+          - link "წესები" [ref=f3e1134] [cursor=pointer]:
+            - /url: https://policies.google.com/terms?hl=ka&fg=1

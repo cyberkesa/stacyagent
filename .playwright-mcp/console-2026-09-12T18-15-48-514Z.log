@@ -1,0 +1,4 @@
+[   13882ms] [INFO] Autofocus processing was blocked because a document already has a focused element. @ https://www.google.com/:0
+[   40789ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://fonts.gstatic.com/s/googlesans/v29/4UaGrENHsxJlGDuGo1OIlL3Owp5eKQtG.woff2:0
+[   40789ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://fonts.gstatic.com/s/googlesans/v29/4UaGrENHsxJlGDuGo1OIlL3Kwp5eKQtGBlc.woff2:0
+[   41316ms] [ERROR] Failed to load resource: net::ERR_NETWORK_CHANGED @ https://play.google.com/log?format=json&hasfast=true:0

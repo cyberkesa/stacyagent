@@ -1,0 +1,23 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "model": "opencode/deepseek-v4-flash-free",
+  "provider": {
+    "slta-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "SLTA Local MLX",
+      "options": {
+        "baseURL": "http://127.0.0.1:8080/v1"
+      },
+      "models": {
+        "qwen3-coder-30b": {
+          "id": "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit",
+          "name": "Qwen3-Coder 30B A3B 4bit",
+          "limit": {
+            "context": 32768,
+            "output": 2048
+          }
+        }
+      }
+    }
+  }
+}

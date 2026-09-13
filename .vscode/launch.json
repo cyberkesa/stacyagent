@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SLTA-v0.27}",
+            "name": "Debug mlxagent",
+            "target": "mlxagent",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug mlxagent"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:SLTA-v0.27}",
+            "name": "Release mlxagent",
+            "target": "mlxagent",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release mlxagent"
+        }
+    ]
+}

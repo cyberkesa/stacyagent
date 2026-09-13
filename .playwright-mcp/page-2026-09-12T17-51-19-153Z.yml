@@ -1,0 +1,49 @@
+- generic [ref=e2]:
+  - navigation [ref=e3]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - link "Gmail" [ref=e8] [cursor=pointer]:
+          - /url: https://mail.google.com/mail/&ogbl
+        - link "სურათების ძიება" [ref=e10] [cursor=pointer]:
+          - /url: https://www.google.com/imghp?hl=ka&ogbl
+          - text: სურათები
+      - button "Google აპები" [ref=e13] [cursor=pointer]
+      - link "შესვლა" [ref=e18] [cursor=pointer]:
+        - /url: https://accounts.google.com/ServiceLogin?hl=ka&passive=true&continue=https://www.google.com/&ec=futura_exp_og_so_72776762_e
+  - img "Google" [ref=e22]
+  - search [ref=e30]:
+    - generic [ref=e32]:
+      - generic [ref=e34]:
+        - button "ფაილებისა და სურათების ატვირთვა" [ref=e39] [cursor=pointer]
+        - combobox "ძიება" [active] [ref=e44]
+        - generic [ref=e45]:
+          - generic [ref=e46]:
+            - button "შეყვანის ინსტრუმენტები" [ref=e49] [cursor=pointer]
+            - button "ხმოვანი ძიება" [ref=e55] [cursor=pointer]
+            - button "სურათებით ძიება" [ref=e60] [cursor=pointer]
+          - link "ხელოვნური ინტელექტის რეჟიმი" [ref=e63] [cursor=pointer]
+      - generic [ref=e76]:
+        - button "Google ძებნა" [ref=e77] [cursor=pointer]
+        - button "იღბალს მივენდობი" [ref=e78] [cursor=pointer]
+  - generic [ref=e81]:
+    - text: "Google ხელმისაწვდომია შემდეგ ენაზე:"
+    - link "English" [ref=e82] [cursor=pointer]:
+      - /url: https://www.google.com/setprefs?sig=0_RXg655ROlCHZlBs3ee_kvbppEg4%3D&hl=en&source=homepage&sa=X&ved=0ahUKEwj--rzIzemWAxW4RvEDHRGyKwsQ2ZgBCCQ
+  - contentinfo [ref=e84]:
+    - generic [ref=e85]: საქართველო
+    - generic [ref=e86]:
+      - generic [ref=e87]:
+        - link "შესახებ" [ref=e88] [cursor=pointer]:
+          - /url: https://about.google/?utm_source=google-GE&utm_medium=referral&utm_campaign=hp-footer&fg=1
+        - link "რეკლამა" [ref=e89] [cursor=pointer]:
+          - /url: https://www.google.com/intl/ka_ge/ads/?subid=ww-ww-et-g-awa-a-g_hpafoot1_1!o2&utm_source=google.com&utm_medium=referral&utm_campaign=google_hpafooter&fg=1
+        - link "ბიზნესისთვის" [ref=e90] [cursor=pointer]:
+          - /url: https://www.google.com/services/?subid=ww-ww-et-g-awa-a-g_hpbfoot1_1!o2&utm_source=google.com&utm_medium=referral&utm_campaign=google_hpbfooter&fg=1
+        - link "როგორ მუშაობს ძიება" [ref=e91] [cursor=pointer]:
+          - /url: https://google.com/search/howsearchworks/?fg=1
+      - generic [ref=e92]:
+        - link "კონფიდენციალური" [ref=e93] [cursor=pointer]:
+          - /url: https://policies.google.com/privacy?hl=ka&fg=1
+        - link "წესები" [ref=e94] [cursor=pointer]:
+          - /url: https://policies.google.com/terms?hl=ka&fg=1
+        - button "პარამეტრები" [ref=e98] [cursor=pointer]
