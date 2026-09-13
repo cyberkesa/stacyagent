@@ -72,6 +72,23 @@ final class TurnController: @unchecked Sendable {
     }
 }
 
+/// Enforces the boundary between conversation and project execution using the
+/// model's output shape. It does not depend on particular user phrases.
+enum RouteSafety {
+    static func correctedDecision(
+        routed: TurnDecision,
+        draftResponse: String,
+        hasProjectContext: Bool
+    ) -> TurnDecision? {
+        guard routed.mode == .chat,
+              hasProjectContext,
+              Qwen3CoderProtocol.containsImplementationArtifact(draftResponse) else {
+            return nil
+        }
+        return .forMode(.agent, source: .model)
+    }
+}
+
 /// Zero-model-pass routing for high-confidence cases only.
 /// Ambiguous input deliberately falls through to TurnController's tiny model pass.
 enum FastTurnRouter {

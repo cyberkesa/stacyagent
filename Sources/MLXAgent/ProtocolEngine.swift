@@ -3,7 +3,7 @@ import Foundation
 enum ProtocolAction: Sendable, CustomStringConvertible {
     case readFile(String)
     case validateFile(String)
-    case openFile(String)
+    case openFile(String, application: String?)
 
     var toolName: String {
         switch self {
@@ -20,7 +20,7 @@ enum ProtocolAction: Sendable, CustomStringConvertible {
         switch self {
         case .readFile(let path),
              .validateFile(let path),
-             .openFile(let path):
+             .openFile(let path, _):
             return path
         }
     }
@@ -30,9 +30,14 @@ enum ProtocolAction: Sendable, CustomStringConvertible {
     }
 
     var normalizedInvocation: NormalizedToolInvocation {
-        NormalizedToolInvocation(
+        var arguments = ["path": path]
+        if case .openFile(_, let application) = self,
+           let application {
+            arguments["application"] = application
+        }
+        return NormalizedToolInvocation(
             name: toolName,
-            arguments: ["path": path],
+            arguments: arguments,
             source: .protocolEngine
         )
     }
@@ -193,7 +198,10 @@ enum ProtocolEngine {
                 // This requirement means inspect THEN launch. Once the fresh
                 // observation exists, relaunch is mechanical. Functional repair
                 // tasks carry mutation requirements separately.
-                return .openFile(path)
+                return .openFile(
+                    path,
+                    application: snapshot.spec?.launchApplication
+                )
 
             default:
                 break
@@ -219,7 +227,10 @@ enum ProtocolEngine {
 
         for requirement in snapshot.missingRequirements {
             if case .launch(.path(let path)) = requirement {
-                return .openFile(path)
+                return .openFile(
+                    path,
+                    application: snapshot.spec?.launchApplication
+                )
             }
         }
 
@@ -244,6 +255,7 @@ enum ProtocolEngine {
         }
 
         let mutationPending = hasPendingMutation(snapshot)
+
         guard mutationPending else {
             return []
         }
@@ -306,6 +318,15 @@ enum ProtocolEngine {
 
         let mutationPending = hasPendingMutation(snapshot)
 
+        let externalPending = snapshot.missingRequirements.contains { requirement in
+            switch requirement {
+            case .externalEffect, .externalArtifact:
+                return true
+            default:
+                return false
+            }
+        }
+
         let validationPending = snapshot.missingRequirements.contains { requirement in
             if case .validate = requirement {
                 return true
@@ -315,6 +336,10 @@ enum ProtocolEngine {
 
         if role == .mutate && observationPending {
             return "runtime requires a fresh observation of the target before the next mutation"
+        }
+
+        if role == .mutate && externalPending {
+            return "runtime requires real external artifact evidence before embedding it"
         }
 
         if (role == .validate || role == .launch) && mutationPending {

@@ -60,10 +60,10 @@ enum SLTASelfTest {
         )
         snapshot = await state.taskSnapshot()
 
-        if case .deterministic(.openFile("budget_lab.html")) = ProtocolEngine.decision(
+        if case .deterministic(.openFile(let path, application: let application)) = ProtocolEngine.decision(
             for: snapshot,
             allowed: allTools
-        ) {
+        ), path == "budget_lab.html", application == nil {
             passed += 1
         } else {
             failures.append("protocol launch after validation")
@@ -293,6 +293,42 @@ enum SLTASelfTest {
             "image search requires and accepts concrete image URL evidence"
         )
 
+        let embedImageSpec = TaskCompiler.compile(
+            userText: "Вставь в red.html фото крота",
+            decision: agent
+        )
+        check(
+            embedImageSpec.kinds.contains(.modify) &&
+            embedImageSpec.requirements.contains(.observe(.path("red.html"))) &&
+            embedImageSpec.requirements.contains(.externalArtifact(.image)) &&
+            embedImageSpec.requirements.contains(.mutateCount(.path("red.html"), 1)) &&
+            embedImageSpec.requirements.contains(.readBack(.path("red.html"))),
+            "HTML image embedding requires search, mutation, and disk read-back"
+        )
+
+        await state.beginTask(embedImageSpec)
+        await state.readBack(path: "red.html", content: "<html></html>")
+        snapshot = await state.taskSnapshot()
+        if case .intelligence(let request) = ProtocolEngine.decision(
+            for: snapshot,
+            allowed: allTools.union(["tavily_search", "mcp_call"])
+        ) {
+            check(
+                request.kind == .externalAction &&
+                request.allowedTools.contains("tavily_search"),
+                "HTML image embedding exposes image search before editing"
+            )
+        } else {
+            failures.append("HTML image embedding exposes image search before editing")
+        }
+        check(
+            ProtocolEngine.blockReason(
+                forTool: "edit_file",
+                snapshot: snapshot
+            )?.contains("external artifact") == true,
+            "HTML image embedding cannot edit before image evidence"
+        )
+
         let externalSession = SessionSnapshot(
             projectPath: "/tmp/slta-external",
             persistencePath: "/tmp/slta-external-state",
@@ -452,6 +488,64 @@ for line in sys.stdin:
         } else {
             failures.append("truncated tool call rejected")
         }
+
+        let implementationDraft = """
+        Сейчас сделаю:
+        ```html
+        <!doctype html><html><body><button>Играть</button></body></html>
+        ```
+        """
+        check(
+            Qwen3CoderProtocol.containsImplementationArtifact(implementationDraft),
+            "implementation artifact is detected by output structure"
+        )
+        check(
+            RouteSafety.correctedDecision(
+                routed: .forMode(.chat),
+                draftResponse: implementationDraft,
+                hasProjectContext: true
+            )?.mode == .agent,
+            "project implementation cannot escape through chat"
+        )
+        check(
+            RouteSafety.correctedDecision(
+                routed: .forMode(.chat),
+                draftResponse: "Обычный разговор без реализации.",
+                hasProjectContext: true
+            ) == nil,
+            "ordinary project-adjacent chat stays chat"
+        )
+
+        let formattedSource = """
+        <section>
+            <button   class="play">Играть</button>
+        </section>
+        """
+        let differentlyFormatted = """
+        <section>
+        <button class="play">Играть</button>
+        </section>
+        """
+        if let range = SmartBlockMatcher.findRange(
+            of: differentlyFormatted,
+            in: formattedSource
+        ) {
+            var revised = formattedSource
+            revised.replaceSubrange(range, with: "<main>Игра</main>")
+            check(
+                revised == "<main>Игра</main>",
+                "unique structural edit tolerates formatting differences"
+            )
+        } else {
+            failures.append("unique structural edit tolerates formatting differences")
+        }
+        check(
+            SmartBlockMatcher.findRange(
+                of: "<button>Играть</button>",
+                in: "<button>Играть</button>\n<button>Играть</button>"
+            ) == nil,
+            "ambiguous structural edit is rejected"
+        )
 
         let unresolved = TaskCompiler.compile(
             userText: "Исправь код и запусти.",
@@ -1389,6 +1483,89 @@ for line in sys.stdin:
             lastFailure: "old text not found in card.html"
         )
 
+        // Intent classification and target resolution are deliberately separate:
+        // once the router identifies an action, arbitrary wording must keep the
+        // current artifact without adding phrase-specific continuation rules.
+        for request in [
+            "сделай фото меньше",
+            "а сможешь добавить шрифты",
+            "пусть оформление станет воздушнее"
+        ] {
+            let focusedContinuity = recoverySession.taskContinuity(
+                for: request,
+                decision: agent
+            )
+            let focusedSpec = TaskCompiler.compile(
+                userText: request,
+                decision: agent,
+                continuity: focusedContinuity
+            )
+            check(
+                focusedContinuity.isContinuation &&
+                focusedContinuity.lastArtifact == "card.html" &&
+                focusedSpec.kinds.contains(.modify) &&
+                focusedSpec.targets.first?.path == "card.html",
+                "routed action inherits focused artifact: \(request)"
+            )
+        }
+
+        let resizeContinuity = recoverySession.taskContinuity(
+            for: "сделай фото меньше",
+            decision: agent
+        )
+        let resizeSpec = TaskCompiler.compile(
+            userText: "сделай фото меньше",
+            decision: agent,
+            continuity: resizeContinuity
+        )
+        check(
+            !resizeSpec.requirements.contains(.externalArtifact(.image)),
+            "editing an existing image does not request a new external image"
+        )
+
+        let editorContinuity = recoverySession.taskContinuity(
+            for: "открой этот файл в visual code",
+            decision: agent
+        )
+        let editorSpec = TaskCompiler.compile(
+            userText: "открой этот файл в visual code",
+            decision: agent,
+            continuity: editorContinuity
+        )
+        check(
+            editorSpec.kinds.contains(.run) &&
+            !editorSpec.kinds.contains(.modify) &&
+            editorSpec.targets.first?.path == "card.html" &&
+            editorSpec.launchApplication == "visual code",
+            "open request preserves its target application"
+        )
+
+        let correctionSpec = TaskCompiler.compile(
+            userText: "а в Visual Studio Code!",
+            decision: agent,
+            continuity: recoverySession.taskContinuity(
+                for: "а в Visual Studio Code!",
+                decision: agent
+            )
+        )
+        check(
+            correctionSpec.kinds.contains(.run) &&
+            !correctionSpec.kinds.contains(.modify) &&
+            correctionSpec.launchApplication == "Visual Studio Code",
+            "application-only correction remains a launch task"
+        )
+
+        let editorState = RuntimeState()
+        await editorState.beginTask(editorSpec)
+        if case .deterministic(.openFile(let path, application: let application)) = ProtocolEngine.decision(
+            for: await editorState.taskSnapshot(),
+            allowed: allTools
+        ), path == "card.html", application == "visual code" {
+            passed += 1
+        } else {
+            failures.append("protocol forwards requested launch application")
+        }
+
         let resumeEdit = recoverySession.taskContinuity(
             for: "тогда редактируй"
         )
@@ -1690,10 +1867,10 @@ for line in sys.stdin:
         )
         relaunchSnapshot = await relaunchState.taskSnapshot()
 
-        if case .deterministic(.openFile("live.html")) = ProtocolEngine.decision(
+        if case .deterministic(.openFile(let path, application: let application)) = ProtocolEngine.decision(
             for: relaunchSnapshot,
             allowed: allTools
-        ) {
+        ), path == "live.html", application == nil {
             passed += 1
         } else {
             failures.append("not-launched recovery deterministic relaunch")

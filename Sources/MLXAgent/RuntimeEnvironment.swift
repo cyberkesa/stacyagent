@@ -20,7 +20,7 @@ struct RuntimeEnvironment: Sendable {
             "node", "npm", "npx",
             "swift", "swiftc", "xcodebuild",
             "git", "rg", "cargo", "go",
-            "ruby", "php", "java", "open", "brew"
+            "ruby", "php", "java", "sh", "bash", "zsh", "open", "brew"
         ]
 
         let fm = FileManager.default

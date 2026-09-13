@@ -4,6 +4,10 @@ struct EmptyInput: Codable, Sendable {}
 struct TextOutput: Codable, Sendable { let result: String }
 
 struct PathInput: Codable, Sendable { let path: String }
+struct OpenFileInput: Codable, Sendable {
+    let path: String
+    let application: String?
+}
 struct ReadFileRangeInput: Codable, Sendable {
     let path: String
     let start_line: Double
@@ -18,6 +22,7 @@ struct EditFileRangeInput: Codable, Sendable {
     let replacement: String
 }
 struct SearchInput: Codable, Sendable { let query: String; let path: String? }
+struct TavilySearchInput: Codable, Sendable { let query: String }
 struct ShellInput: Codable, Sendable { let command: String }
 struct URLInput: Codable, Sendable { let url: String }
 struct MCPServerInput: Codable, Sendable { let server: String }

@@ -213,6 +213,7 @@ struct TaskSpec: Sendable, CustomStringConvertible {
     let kinds: Set<TaskKind>
     let originalRequest: String
     let targets: [ArtifactRef]
+    let launchApplication: String?
     let desiredState: Set<DesiredState>
     let requirements: [TaskRequirement]
     let constraints: [TaskConstraint]
@@ -624,17 +625,29 @@ enum TaskCompiler {
         // continuation routing and TaskCompiler cannot silently drift apart.
         let discourse = DiscourseResolver.analyze(userText)
         let stagedBreakAndRepair = discourse.stagedBreakAndRepair
+        let requestedApplication = discourse.requestedApplication
 
         let failureFeedback = continuity?.failureFeedback == true
         let failureKind = continuity?.failureKind ?? .none
         let createRequested =
             discourse.createVerb ||
             continuity?.requestsNewArtifact == true
+        let implicitFocusedMutation =
+            decision.mode == .agent &&
+            targetPath != nil &&
+            !createRequested &&
+            requestedApplication == nil &&
+            !discourse.launchRequest &&
+            !discourse.inspectionRequest &&
+            !discourse.explainRequest &&
+            !discourse.verifyRequest
+
         let repairRequested =
             discourse.revisionRequest ||
             continuity?.revisionRequest == true ||
             failureKind == .notChanged ||
-            failureKind == .functional
+            failureKind == .functional ||
+            implicitFocusedMutation
 
         if decision.mode == .chat {
             kinds.insert(.converse)
@@ -646,6 +659,20 @@ enum TaskCompiler {
             if containsImageRequest(text) {
                 appendUnique(.externalArtifact(.image), to: &requirements)
             }
+        }
+
+        // A request such as "вставь в него фото крота" is a hybrid task:
+        // first obtain a real image URL, then mutate the local artifact. Without
+        // this requirement the runtime used to expose only edit tools and could
+        // accept a fabricated/broken URL as a completed file change.
+        let embedsExternalImage =
+            decision.mode == .agent &&
+            requestsExternalImage(text) &&
+            (createRequested || repairRequested || isWebPath(targetPath))
+
+        if embedsExternalImage {
+            desired.insert(.externalEffect)
+            appendUnique(.externalArtifact(.image), to: &requirements)
         }
         if decision.mode == .mcpRead {
             kinds.insert(.inspect)
@@ -697,6 +724,7 @@ enum TaskCompiler {
 
         let launchRequested =
             discourse.launchRequest ||
+            requestedApplication != nil ||
             (
                 continuity?.isContinuation == true &&
                 continuity?.previousRequiredLaunch == true &&
@@ -757,6 +785,11 @@ enum TaskCompiler {
 
         if explicitReadBack {
             constraints.append(.explicitReadBack)
+            appendUnique(.readBack(targetPath.map(TargetSelector.path) ?? .any), to: &requirements)
+        }
+
+        if embedsExternalImage {
+            // Confirm the edit is present on disk before reporting success.
             appendUnique(.readBack(targetPath.map(TargetSelector.path) ?? .any), to: &requirements)
         }
 
@@ -863,6 +896,7 @@ enum TaskCompiler {
             kinds: kinds,
             originalRequest: userText,
             targets: targets,
+            launchApplication: requestedApplication,
             desiredState: desired,
             requirements: requirements,
             constraints: constraints,
@@ -876,6 +910,22 @@ enum TaskCompiler {
         [
             "картин", "изображ", "фото", "фотограф", "image", "photo", "picture"
         ].contains(where: text.contains)
+    }
+
+    private static func requestsExternalImage(_ text: String) -> Bool {
+        guard containsImageRequest(text) else { return false }
+        return [
+            "найди", "поищи", "подбери", "встав", "добав", "помести",
+            "загрузи", "скачай", "из интернета", "из сети",
+            "find", "search", "insert", "add", "embed", "download"
+        ].contains(where: text.contains)
+    }
+
+    private static func isWebPath(_ path: String?) -> Bool {
+        guard let path else { return false }
+        return ["html", "htm"].contains(
+            URL(fileURLWithPath: path).pathExtension.lowercased()
+        )
     }
 
     private static func minimumLineCount(

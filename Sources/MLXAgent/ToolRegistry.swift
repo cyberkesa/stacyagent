@@ -18,12 +18,13 @@ final class ToolRegistry: @unchecked Sendable {
     private let searchTool: Tool<SearchInput, TextOutput>
     private let shellTool: Tool<ShellInput, TextOutput>
     private let validateFileTool: Tool<PathInput, TextOutput>
-    private let openFileTool: Tool<PathInput, TextOutput>
+    private let openFileTool: Tool<OpenFileInput, TextOutput>
     private let openURLTool: Tool<URLInput, TextOutput>
     private let gitStatusTool: Tool<EmptyInput, TextOutput>
     private let gitDiffTool: Tool<EmptyInput, TextOutput>
     private let mcpServersTool: Tool<EmptyInput, TextOutput>
     private let mcpListToolsTool: Tool<MCPServerInput, TextOutput>
+    private let tavilySearchTool: Tool<TavilySearchInput, TextOutput>
     private let mcpCallTool: Tool<MCPCallInput, TextOutput>
 
     init(workspace: Workspace, mcp: MCPBridge, events: EventBus, runtime: RuntimeEnvironment) {
@@ -93,7 +94,7 @@ final class ToolRegistry: @unchecked Sendable {
 
         editFileTool = Tool(
             name: "edit_file",
-            description: "Replace one unique exact text block in a project file.",
+            description: "Replace one unique text block in a project file. Formatting-only whitespace differences are accepted; ambiguous matches are rejected.",
             parameters: [
                 .required("path", type: .string, description: "Project-relative file path"),
                 .required("old", type: .string, description: "Unique exact text to replace"),
@@ -152,11 +153,19 @@ final class ToolRegistry: @unchecked Sendable {
 
         openFileTool = Tool(
             name: "open_file",
-            description: "Open one existing project file with the macOS default application. Prefer this over shell for launching a generated HTML/demo artifact.",
+            description: "Open one existing project file on macOS, optionally in a user-requested installed application. Prefer this over shell for launching an artifact.",
             parameters: [
-                .required("path", type: .string, description: "Project-relative file path")
+                .required("path", type: .string, description: "Project-relative file path"),
+                .optional("application", type: .string, description: "Application name requested by the user, such as Visual Studio Code or TextEdit")
             ]
-        ) { input in TextOutput(result: try workspace.openFile(input.path)) }
+        ) { input in
+            TextOutput(
+                result: try workspace.openFile(
+                    input.path,
+                    application: input.application
+                )
+            )
+        }
 
         openURLTool = Tool(
             name: "open_url",
@@ -197,6 +206,31 @@ final class ToolRegistry: @unchecked Sendable {
             return TextOutput(result: try mcp.listTools(server: resolvedServer))
         }
 
+        tavilySearchTool = Tool(
+            name: "tavily_search",
+            description: "Search the web and return real image URLs. Use for a requested photo or image before embedding it in a project file.",
+            parameters: [
+                .required("query", type: .string, description: "Specific image search query")
+            ]
+        ) { input in
+            let call = try mcp.callDirect(
+                server: "tavily",
+                tool: "tavily_search",
+                arguments: [
+                    "query": input.query,
+                    "include_images": true
+                ]
+            )
+            return TextOutput(
+                result: MCPToolEnvelope.encode(
+                    server: "tavily",
+                    tool: "tavily_search",
+                    urls: call.urls,
+                    content: call.rendered
+                )
+            )
+        }
+
         mcpCallTool = Tool(
             name: "mcp_call",
             description: "Call a tool on an MCP server. Available servers: [\(configuredServers)]. Discover tool names with mcp_list_tools first.",
@@ -229,7 +263,8 @@ final class ToolRegistry: @unchecked Sendable {
             writeFileTool.schema, editFileTool.schema, editFileRangeTool.schema,
             searchTool.schema, shellTool.schema, validateFileTool.schema,
             openFileTool.schema, openURLTool.schema, gitStatusTool.schema, gitDiffTool.schema,
-            mcpServersTool.schema, mcpListToolsTool.schema, mcpCallTool.schema
+            mcpServersTool.schema, mcpListToolsTool.schema, tavilySearchTool.schema,
+            mcpCallTool.schema
         ]
     }
 
@@ -251,7 +286,7 @@ final class ToolRegistry: @unchecked Sendable {
             names.formUnion(["mcp_servers", "mcp_list_tools"])
         }
         if capabilities.contains(.mcpCall) {
-            names.formUnion(["mcp_servers", "mcp_list_tools", "mcp_call", "open_url"])
+            names.formUnion(["mcp_servers", "mcp_list_tools", "mcp_call", "tavily_search", "open_url"])
         }
         return names
     }
@@ -277,6 +312,7 @@ final class ToolRegistry: @unchecked Sendable {
             (gitDiffTool.name, gitDiffTool.schema),
             (mcpServersTool.name, mcpServersTool.schema),
             (mcpListToolsTool.name, mcpListToolsTool.schema),
+            (tavilySearchTool.name, tavilySearchTool.schema),
             (mcpCallTool.name, mcpCallTool.schema)
         ]
         return pairs.compactMap { allowed.contains($0.0) ? $0.1 : nil }
@@ -299,6 +335,13 @@ final class ToolRegistry: @unchecked Sendable {
             snapshot: protocolSnapshot
         ) {
             return #"{"ok":true,"status":"protocol_blocked","reason":"\#(escapeJSON(reason))","instruction":"Follow the runtime task order instead of repeating this tool."}"#
+        }
+
+        if SemanticToolCatalog.isMutating(name),
+           let expected = protocolSnapshot.resolvedTargetPath,
+           case .string(let supplied)? = toolCall.function.arguments["path"],
+           supplied != expected {
+            return #"{"ok":false,"error":"mutation target does not match the active task","expected":"\#(escapeJSON(expected))","supplied":"\#(escapeJSON(supplied))"}"#
         }
 
         let signature = name + ":" + String(describing: toolCall.function.arguments)
@@ -409,6 +452,21 @@ final class ToolRegistry: @unchecked Sendable {
             case mcpListToolsTool.name:
                 result = try await toolCall.execute(with: mcpListToolsTool).toolResult
                 await state.observation(name)
+
+            case tavilySearchTool.name:
+                let encoded = try await toolCall.execute(with: tavilySearchTool).toolResult
+                if let decoded = MCPToolEnvelope.decode(encoded) {
+                    result = decoded.content
+                    await state.externalSuccess(
+                        name,
+                        server: decoded.server,
+                        operation: decoded.tool,
+                        urls: decoded.urls
+                    )
+                } else {
+                    result = encoded
+                    await state.externalSuccess(name, server: "tavily", operation: "tavily_search")
+                }
 
             case mcpCallTool.name:
                 let encoded = try await toolCall.execute(with: mcpCallTool).toolResult
@@ -528,6 +586,14 @@ final class ToolRegistry: @unchecked Sendable {
             return #"{"ok":true,"status":"protocol_blocked","reason":"\#(escapeJSON(reason))","instruction":"Follow runtime task order."}"#
         }
 
+
+        if SemanticToolCatalog.isMutating(name),
+           let expected = before.resolvedTargetPath,
+           let supplied = args["path"],
+           supplied != expected {
+            return #"{"ok":false,"error":"mutation target does not match the active task","expected":"\#(escapeJSON(expected))","supplied":"\#(escapeJSON(supplied))"}"#
+        }
+
         do {
             try validateInvocation(name: name, args: args)
         } catch {
@@ -632,7 +698,10 @@ final class ToolRegistry: @unchecked Sendable {
 
             case "open_file":
                 guard let path = args["path"] else { throw CLIError("open_file requires path") }
-                result = try workspace.openFile(path)
+                result = try workspace.openFile(
+                    path,
+                    application: args["application"]
+                )
                 await state.launchSuccess(name, path: path)
 
             case "open_url":
@@ -657,6 +726,16 @@ final class ToolRegistry: @unchecked Sendable {
                 let server = Self.resolveServer(rawServer, in: mcp.serverNames)
                 result = try mcp.listTools(server: server)
                 await state.observation(name)
+
+            case "tavily_search":
+                let q = args["query"] ?? args["q"] ?? ""
+                let call = try mcp.call(
+                    server: "tavily",
+                    tool: "tavily_search",
+                    argumentsJSON: "{\"query\": \"\(escapeJSON(q))\", \"include_images\": true}"
+                )
+                result = call.rendered
+                await state.externalSuccess(name, server: "tavily", operation: "tavily_search", urls: call.urls)
 
             case "mcp_call":
                 guard let rawServer = args["server"], let tool = args["tool"] else {
@@ -765,7 +844,6 @@ final class ToolRegistry: @unchecked Sendable {
     var runtimeContext: String { runtime.modelContext }
     var projectPath: String { runtime.projectPath }
 
-    // MARK: - Server Resolution
     private static func resolveServer(_ raw: String, in available: [String]) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         if available.contains(trimmed) { return trimmed }
@@ -777,9 +855,8 @@ final class ToolRegistry: @unchecked Sendable {
         if let match = available.first(where: { $0.lowercased().contains(lower) || lower.contains($0.lowercased()) }) {
             return match
         }
-        // Автовыбор единственного доступного сервера по назначению
         if lower.contains("search") || lower.contains("web") {
-            if let s = available.first(where: { $0.contains("search") }) { return s }
+            if let s = available.first(where: { $0.contains("search") || $0.contains("tavily") }) { return s }
         }
         if lower.contains("browser") || lower.contains("page") || lower.contains("playwright") {
             if let s = available.first(where: { $0.contains("playwright") || $0.contains("browser") }) { return s }
@@ -787,10 +864,8 @@ final class ToolRegistry: @unchecked Sendable {
         return trimmed
     }
 
-    // MARK: - Error Classification
     private func isRecoverableError(tool: String, message: String) -> Bool {
-        // Ошибки MCP теперь не убивают задачу, а дают модели возможность исправиться
-        if tool == "mcp_call" || tool == "mcp_list_tools" || tool == "mcp_servers" {
+        if tool == "mcp_call" || tool == "mcp_list_tools" || tool == "mcp_servers" || tool == "tavily_search" {
             return true
         }
 
@@ -802,7 +877,7 @@ final class ToolRegistry: @unchecked Sendable {
         guard tool == "edit_file" || tool == "edit_file_range" else { return false }
 
         let markers = [
-            "old text not found", "old text is not unique", "file must be read before",
+            "old text not found", "unique edit target not found", "old text is not unique", "file must be read before",
             "line range", "exceeds file line count", "invalid line range"
         ]
         return markers.contains(where: lower.contains)
@@ -896,6 +971,8 @@ final class ToolRegistry: @unchecked Sendable {
         case "mcp_call":
             try require("server")
             try require("tool")
+        case "tavily_search":
+            break
         default:
             throw CLIError("unknown tool: \(name)")
         }

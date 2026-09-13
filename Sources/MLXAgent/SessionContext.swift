@@ -319,7 +319,8 @@ struct SessionSnapshot: Sendable {
     }
 
     func taskContinuity(
-        for userText: String
+        for userText: String,
+        decision: TurnDecision? = nil
     ) -> TaskContinuity {
         let discourse = DiscourseResolver.analyze(userText)
 
@@ -363,6 +364,18 @@ struct SessionSnapshot: Sendable {
 
         let newScope = discourse.newProjectScope
 
+        // The router owns intent classification; the session owns referent
+        // resolution. Once a message is classified as a project action, keep the
+        // focused artifact unless the user explicitly names another target, creates
+        // a new artifact, or starts a new project scope. This is independent of the
+        // wording and therefore covers arbitrary follow-up edits.
+        let routedToFocusedArtifact =
+            decision?.mode == .agent &&
+            lastArtifact != nil &&
+            !explicitTarget &&
+            !newScope &&
+            !discourse.createVerb
+
         let unresolvedPriorActionResume =
             !previousTaskComplete &&
             !discourse.explicitFileTarget &&
@@ -377,7 +390,8 @@ struct SessionSnapshot: Sendable {
             requestsNewArtifact ||
             discourse.genericArtifactReference ||
             discourse.priorReference ||
-            unresolvedPriorActionResume
+            unresolvedPriorActionResume ||
+            routedToFocusedArtifact
 
         // A request with its own concrete path owns that target even if it also
         // contains a local pronoun ("его", "it").
@@ -433,14 +447,16 @@ struct SessionSnapshot: Sendable {
     }
 
     func promptContext(
-        currentUserText: String
+        currentUserText: String,
+        decision: TurnDecision? = nil
     ) -> String {
         guard hasProjectContinuity || !turns.isEmpty else {
             return ""
         }
 
         let continuity = taskContinuity(
-            for: currentUserText
+            for: currentUserText,
+            decision: decision
         )
 
         var lines: [String] = [

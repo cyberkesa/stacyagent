@@ -349,20 +349,75 @@ final class MCPBridge: @unchecked Sendable {
             resolvedArguments["include_images"] = true
         }
 
-        let response = try request(server: server, method: "tools/call", params: [
+        var response = try request(server: server, method: "tools/call", params: [
             "name": resolvedTool,
             "arguments": resolvedArguments
         ])
 
-        let result = response["result"] as? [String: Any] ?? [:]
-        let isError = result["isError"] as? Bool == true
-        let rendered = try Self.extractOrRender(result)
+        var result = response["result"] as? [String: Any] ?? [:]
+        var isError = result["isError"] as? Bool == true
+        var rendered = try Self.extractOrRender(result)
+
+        if isError,
+           let retry = try recoverPlaywrightTarget(
+               server: server,
+               tool: resolvedTool,
+               arguments: resolvedArguments,
+               failure: rendered
+           ) {
+            response = retry
+            result = response["result"] as? [String: Any] ?? [:]
+            isError = result["isError"] as? Bool == true
+            rendered = try Self.extractOrRender(result)
+        }
 
         if isError {
             throw CLIError("MCP tool '\(resolvedTool)' failure: \(rendered)")
         }
 
         return MCPCallResult(rendered: rendered, urls: Self.extractURLs(from: result))
+    }
+
+    private func recoverPlaywrightTarget(
+        server: String,
+        tool: String,
+        arguments: [String: Any],
+        failure: String
+    ) throws -> [String: Any]? {
+        let lowerFailure = failure.lowercased()
+        guard server.lowercased().contains("playwright"),
+              arguments["target"] != nil,
+              lowerFailure.contains("does not match any elements") ||
+                lowerFailure.contains("element not found") else {
+            return nil
+        }
+
+        let snapshotResponse = try request(
+            server: server,
+            method: "tools/call",
+            params: ["name": "browser_snapshot", "arguments": [:]]
+        )
+        let snapshotResult = snapshotResponse["result"] as? [String: Any] ?? [:]
+        guard snapshotResult["isError"] as? Bool != true else { return nil }
+        let snapshot = try Self.extractOrRender(snapshotResult)
+        let pattern = #"\[ref=([A-Za-z0-9_-]+)\]"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                  in: snapshot,
+                  range: NSRange(snapshot.startIndex..., in: snapshot)
+              ),
+              let refRange = Range(match.range(at: 1), in: snapshot) else {
+            return nil
+        }
+
+        var retryArguments = arguments
+        let ref = String(snapshot[refRange])
+        retryArguments["target"] = ref
+        retryArguments["ref"] = ref
+        return try request(server: server, method: "tools/call", params: [
+            "name": tool,
+            "arguments": retryArguments
+        ])
     }
 
     func listTools(server: String) throws -> String {

@@ -1,9 +1,10 @@
 import Foundation
 
-struct CLIError: Error, CustomStringConvertible, Sendable {
+struct CLIError: Error, LocalizedError, CustomStringConvertible, Sendable {
     let message: String
     init(_ message: String) { self.message = message }
     var description: String { message }
+    var errorDescription: String? { message }
 }
 
 enum ApprovalMode: String, Sendable {
@@ -16,17 +17,9 @@ struct AgentOptions: Sendable {
     var modelID = "mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit"
     var projectURL: URL
     var maxRounds = 12
-
-    // nil means "let the model stop naturally". SLTA no longer imposes
-    // a token ceiling unless the user explicitly configures one.
     var chatMaxTokens: Int? = nil
     var agentMaxTokens: Int? = nil
-
-    // 0 disables the watchdog. The default is intentionally unlimited:
-    // a local model may spend a long time prefilling/compiling kernels or
-    // emitting a large tool call without being unhealthy.
     var generationTimeoutSeconds = 0
-
     var controllerTimeoutSeconds = 4
     var draftModelID: String? = nil
     var shellTimeoutSeconds = 120
@@ -54,71 +47,62 @@ struct AgentOptions: Sendable {
                 guard i + 1 < args.count else { throw CLIError("--model requires a value") }
                 model = args[i + 1]
                 i += 2
-
             case "--max-rounds":
                 guard i + 1 < args.count, let value = Int(args[i + 1]), value > 0 else {
                     throw CLIError("--max-rounds requires a positive integer")
                 }
                 maxRounds = value
                 i += 2
-
             case "--max-tokens", "--agent-max-tokens":
                 guard i + 1 < args.count, let value = Int(args[i + 1]), value > 0 else {
                     throw CLIError("--agent-max-tokens requires a positive integer")
                 }
                 agentMaxTokens = value
                 i += 2
-
             case "--chat-max-tokens":
                 guard i + 1 < args.count, let value = Int(args[i + 1]), value > 0 else {
                     throw CLIError("--chat-max-tokens requires a positive integer")
                 }
                 chatMaxTokens = value
                 i += 2
-
             case "--controller-timeout":
                 guard i + 1 < args.count, let value = Int(args[i + 1]), value > 0 else {
                     throw CLIError("--controller-timeout requires seconds")
                 }
                 controllerTimeout = value
                 i += 2
-
             case "--draft-model":
                 guard i + 1 < args.count else {
                     throw CLIError("--draft-model requires a Hugging Face model id")
                 }
                 draftModelID = args[i + 1]
                 i += 2
-
             case "--generation-timeout":
                 guard i + 1 < args.count, let value = Int(args[i + 1]), value >= 0 else {
                     throw CLIError("--generation-timeout requires zero or a positive number of seconds")
                 }
                 generationTimeout = value
                 i += 2
-
             case "--shell-timeout":
                 guard i + 1 < args.count, let value = Int(args[i + 1]), value > 0 else {
                     throw CLIError("--shell-timeout requires seconds")
                 }
                 shellTimeout = value
                 i += 2
-
             case "--approval-mode":
                 guard i + 1 < args.count, let value = ApprovalMode(rawValue: args[i + 1]) else {
                     throw CLIError("--approval-mode must be read-only, workspace, or full")
                 }
                 approvalMode = value
                 i += 2
-
             case "--no-mcp":
                 allowMCP = false
                 i += 1
-
             case "--help", "-h":
                 printHelp()
                 exit(0)
-
+            case "--cli":
+                i += 1
             default:
                 if args[i].hasPrefix("-") {
                     throw CLIError("Unknown option: \(args[i])")
@@ -134,12 +118,10 @@ struct AgentOptions: Sendable {
         let path = project ?? FileManager.default.currentDirectoryPath
         let url = URL(fileURLWithPath: path).standardizedFileURL
         var isDir: ObjCBool = false
-
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir),
               isDir.boolValue else {
             throw CLIError("Project directory does not exist: \(url.path)")
         }
-
         return AgentOptions(
             modelID: model,
             projectURL: url,
@@ -254,12 +236,11 @@ struct TurnDecision: Sendable {
             .init(mode: mode, capabilities: [], source: source)
         case .inspect:
             .init(mode: mode, capabilities: [.projectRead, .gitRead], source: source)
-        case .agent:
-            .init(mode: mode, capabilities: [.projectRead, .projectWrite, .shell, .gitRead], source: source)
+        case .agent, .mcpAgent:
+            // Полный набор возможностей для кодинга и веб-поиска
+            .init(mode: mode, capabilities: [.projectRead, .projectWrite, .shell, .gitRead, .mcpDiscover, .mcpCall], source: source)
         case .mcpRead:
             .init(mode: mode, capabilities: [.mcpDiscover], source: source)
-        case .mcpAgent:
-            .init(mode: mode, capabilities: [.projectRead, .mcpDiscover, .mcpCall], source: source)
         }
     }
 }

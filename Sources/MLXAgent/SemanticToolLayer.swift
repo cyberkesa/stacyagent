@@ -267,6 +267,14 @@ enum SemanticToolCatalog {
                 requiresObservedTargetBeforeMutation: false
             ),
             .init(
+                name: "tavily_search",
+                role: .external,
+                deterministic: false,
+                cachePolicy: .none,
+                parallelizable: false,
+                requiresObservedTargetBeforeMutation: false
+            ),
+            .init(
                 name: "open_url",
                 role: .external,
                 deterministic: true,

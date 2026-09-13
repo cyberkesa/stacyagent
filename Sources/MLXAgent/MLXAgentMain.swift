@@ -6,6 +6,16 @@ import SwiftUI
 @MainActor
 struct MLXAgentMain {
     static func main() {
+        if CommandLine.arguments.contains("--selftest") {
+            let completion = DispatchSemaphore(value: 0)
+            Task.detached {
+                print(await SLTASelfTest.run())
+                completion.signal()
+            }
+            completion.wait()
+            return
+        }
+
         if CommandLine.arguments.contains("--cli") {
             runCLIMode()
             return

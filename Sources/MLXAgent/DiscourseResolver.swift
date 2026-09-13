@@ -20,6 +20,7 @@ struct DiscourseAnalysis: Sendable {
     let inspectionRequest: Bool
     let explainRequest: Bool
     let launchRequest: Bool
+    let requestedApplication: String?
     let verifyRequest: Bool
     let stagedBreakAndRepair: Bool
     let explicitFileTarget: Bool
@@ -38,6 +39,8 @@ enum DiscourseResolver {
         let explain = hasExplainRequest(text)
         let verify = hasVerifyRequest(text)
 
+        let launch = hasLaunchRequest(text)
+
         return DiscourseAnalysis(
             text: text,
             failureKind: failureKind(text),
@@ -50,7 +53,12 @@ enum DiscourseResolver {
             inspectVerb: inspection || explain || verify,
             inspectionRequest: inspection,
             explainRequest: explain,
-            launchRequest: hasLaunchRequest(text),
+            launchRequest: launch,
+            requestedApplication: requestedApplication(
+                raw,
+                hasLaunchRequest: launch,
+                hasActionVerb: action
+            ),
             verifyRequest: verify,
             stagedBreakAndRepair: hasStagedBreakAndRepair(text),
             explicitFileTarget: hasExplicitFileTarget(raw),
@@ -146,6 +154,7 @@ enum DiscourseResolver {
         if [
             "не работает",
             "не сработ",
+            "не запуска",
             "белый экран",
             "пустой экран",
             "черный экран",
@@ -168,6 +177,9 @@ enum DiscourseResolver {
             "артефакт",
             "doesn't work",
             "does not work",
+            "nothing happens",
+            "doesn't respond",
+            "does not respond",
             "failed",
             "error",
             "bug",
@@ -225,7 +237,7 @@ enum DiscourseResolver {
     private static func hasActionVerb(_ text: String) -> Bool {
         [
             "создай", "измени", "исправ", "почини", "удал", "запусти",
-            "открой", "выполни", "сделай", "добавь", "внес", "доработ",
+            "открой", "выполни", "сделай", "добавь", "встав", "внес", "доработ",
             "улучш", "обнов", "переработ", "сохрани", "перепиши",
             "редакт", "правь",
             "create", "edit", "fix", "run", "open", "execute", "improve",
@@ -281,9 +293,38 @@ enum DiscourseResolver {
         ].contains(where: text.contains)
     }
 
+    /// Extracts an application destination without maintaining an application
+    /// allow-list. Workspace resolves the value against applications actually
+    /// installed on the Mac, so this works for editors beyond VS Code as well.
+    private static func requestedApplication(
+        _ raw: String,
+        hasLaunchRequest: Bool,
+        hasActionVerb: Bool
+    ) -> String? {
+        let pattern = #"(?iu)(?:^|\s)(?:в|через|using|with)\s+([\p{L}\p{N}][\p{L}\p{N} .+_\-]{1,80}?)[.!?]*$"#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                in: raw,
+                range: NSRange(raw.startIndex..., in: raw)
+              ),
+              let range = Range(match.range(at: 1), in: raw) else {
+            return nil
+        }
+
+        let candidate = raw[range]
+            .trimmingCharacters(in: .whitespacesAndNewlines.union(.punctuationCharacters))
+        guard !candidate.isEmpty else { return nil }
+
+        // A destination on an explicit open request is an application. A short
+        // correction such as "а в Visual Studio Code" has no competing action
+        // and inherits the preceding launch from session state.
+        guard hasLaunchRequest || !hasActionVerb else { return nil }
+        return candidate
+    }
+
     private static func hasRevisionRequest(_ text: String) -> Bool {
         if hasActionVerb(text) && [
-            "измени", "исправ", "почини", "добавь", "внес", "доработ",
+            "измени", "исправ", "почини", "добавь", "встав", "внес", "доработ",
             "улучш", "обнов", "переработ", "перепиши", "удал", "замени",
             "рефактор", "сохрани",
             "редакт", "правь",

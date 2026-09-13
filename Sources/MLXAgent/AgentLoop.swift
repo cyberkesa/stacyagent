@@ -110,7 +110,7 @@ final class AgentLoop: @unchecked Sendable {
         }
 
         let routeStarted = ContinuousClock.now
-        let decision: TurnDecision
+        var decision: TurnDecision
 
         if let continuationDecision = sessionBefore.continuationDecision(for: task) {
             decision = continuationDecision
@@ -124,28 +124,56 @@ final class AgentLoop: @unchecked Sendable {
         stats.routerSeconds = Self.seconds(ContinuousClock.now - routeStarted)
         stats.routeSource = decision.source
 
-        let continuity = sessionBefore.taskContinuity(for: task)
-        let promptContext = sessionBefore.promptContext(currentUserText: task)
-
-        if decision.mode != .chat {
-            await registry.beginTask(task, decision: decision, continuity: continuity)
-        }
+        var continuity = sessionBefore.taskContinuity(
+            for: task,
+            decision: decision
+        )
+        var promptContext = sessionBefore.promptContext(
+            currentUserText: task,
+            decision: decision
+        )
 
         if decision.mode == .chat {
             stats.taskStatus = "chat"
             let answer = try await model.respondChat(to: task, sessionContext: promptContext, stats: &stats)
             let clean = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !clean.isEmpty {
-                await events.emit(.assistant(clean))
+
+            if let corrected = RouteSafety.correctedDecision(
+                routed: decision,
+                draftResponse: clean,
+                hasProjectContext: sessionBefore.hasProjectContinuity
+            ) {
+                // Do not expose the discarded implementation draft. Re-enter the
+                // same request through the evidence-backed project executor.
+                decision = corrected
+                continuity = sessionBefore.taskContinuity(
+                    for: task,
+                    decision: corrected
+                )
+                promptContext = sessionBefore.promptContext(
+                    currentUserText: task,
+                    decision: corrected
+                )
+                stats.routeSource = corrected.source
+                stats.taskStatus = "route-corrected"
+                await events.emit(
+                    .notice("project implementation redirected from chat to tools")
+                )
+            } else {
+                if !clean.isEmpty {
+                    await events.emit(.assistant(clean))
+                }
+                await sessionContext.recordChat(user: task, assistant: clean)
+                stats.finish()
+                lastStats = stats
+                await events.emit(.completed(stats))
+                return
             }
-            await sessionContext.recordChat(user: task, assistant: clean)
-            stats.finish()
-            lastStats = stats
-            await events.emit(.completed(stats))
-            return
         }
 
-        var response = ""
+        await registry.beginTask(task, decision: decision, continuity: continuity)
+
+        let response: String
         do {
             response = try await model.respondTask(
                 to: task,
@@ -155,14 +183,15 @@ final class AgentLoop: @unchecked Sendable {
                 stats: &stats
             )
         } catch {
-            // Если тулы выполнились (например поиск), но цикл оборвался на пустом тексте —
-            // закрываем задачу успехом и отдаем подтверждение вместо падения с CLIError
-            let toolCount = await registry.state.tools()
-            if toolCount > 0 {
-                response = "Поиск успешно выполнен! Результаты отображены выше. ✨"
-            } else {
-                throw error
-            }
+            let failedState = await registry.taskSnapshot()
+            await sessionContext.recordProject(
+                user: task,
+                assistant: "",
+                decision: decision,
+                task: failedState,
+                continuity: continuity
+            )
+            throw error
         }
 
         let taskState = await registry.taskSnapshot()
@@ -173,13 +202,24 @@ final class AgentLoop: @unchecked Sendable {
         lastStats = stats
 
         let clean = response.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard taskState.isComplete else {
+            await sessionContext.recordProject(
+                user: task,
+                assistant: "",
+                decision: decision,
+                task: taskState,
+                continuity: continuity
+            )
+            throw CLIError("Задача не завершена: \(taskState.incompleteReason)")
+        }
+
         if !clean.isEmpty {
             await events.emit(.assistant(clean))
         }
 
         await sessionContext.recordProject(
             user: task,
-            assistant: clean.isEmpty ? "Готово!" : clean,
+            assistant: clean.isEmpty ? "Готово." : clean,
             decision: decision,
             task: taskState,
             continuity: continuity

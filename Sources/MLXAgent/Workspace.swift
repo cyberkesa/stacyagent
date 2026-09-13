@@ -99,65 +99,64 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
 
 // MARK: - Smart Cursor-style Block Matcher
 enum SmartBlockMatcher {
-    /// Ищет диапазон для замены в файле в 3 уровня:
-    /// 1. Exact match (точное совпадение)
-    /// 2. Whitespace-normalized match (игнорирует разницу в пробелах на концах строк и CRLF/LF)
-    /// 3. Context-anchored match (привязка по первой и последней строке блока)
+    /// Resolves only a unique target: first byte-for-byte, then by canonical
+    /// line structure. It never guesses between multiple similar blocks.
     static func findRange(of oldText: String, in fullText: String) -> Range<String.Index>? {
-        // Уровень 1: Точное посимвольное совпадение
-        if let exactRange = fullText.range(of: oldText) {
-            // Проверяем уникальность
-            if fullText[exactRange.upperBound...].range(of: oldText) == nil {
-                return exactRange
-            }
+        let exactMatches = allRanges(of: oldText, in: fullText)
+        if exactMatches.count == 1 {
+            return exactMatches[0]
         }
 
         let fullLines = fullText.components(separatedBy: "\n")
-        let oldLines = oldText.components(separatedBy: "\n")
+        var oldLines = oldText.components(separatedBy: "\n")
+        while oldLines.first.map(canonicalLine)?.isEmpty == true { oldLines.removeFirst() }
+        while oldLines.last.map(canonicalLine)?.isEmpty == true { oldLines.removeLast() }
 
-        guard !oldLines.isEmpty else { return nil }
+        guard !oldLines.isEmpty, fullLines.count >= oldLines.count else { return nil }
+        let canonicalOld = oldLines.map(canonicalLine)
+        var structuralMatches: [Range<String.Index>] = []
 
-        // Уровень 2: Сопоставление с триммингом пробелов по краям строк
-        let trimmedOld = oldLines.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        if !trimmedOld.isEmpty {
-            for i in 0...(fullLines.count - trimmedOld.count) {
-                let candidateSlice = fullLines[i..<(i + trimmedOld.count)].map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
-                if candidateSlice == trimmedOld {
-                    // Нашли совпадение строк! Восстанавливаем точный Range в исходном тексте
-                    if let startIdx = lineIndex(to: i, in: fullText),
-                       let endIdx = lineIndex(to: i + trimmedOld.count, in: fullText, isEnd: true) {
-                        return startIdx..<endIdx
-                    }
-                }
+        for startLine in 0...(fullLines.count - oldLines.count) {
+            let candidate = fullLines[startLine..<(startLine + oldLines.count)]
+                .map(canonicalLine)
+            guard candidate == canonicalOld,
+                  let start = lineIndex(to: startLine, in: fullText),
+                  let lineBoundary = lineIndex(
+                    to: startLine + oldLines.count,
+                    in: fullText,
+                    isEnd: true
+                  ) else { continue }
+            let end: String.Index
+            if lineBoundary > start,
+               fullText[fullText.index(before: lineBoundary)] == "\n" {
+                end = fullText.index(before: lineBoundary)
+            } else {
+                end = lineBoundary
             }
+            structuralMatches.append(start..<end)
         }
 
-        // Уровень 3: Якорное сопоставление (первая и последняя строка)
-        if oldLines.count >= 3 {
-            let firstLine = oldLines.first!.trimmingCharacters(in: .whitespacesAndNewlines)
-            let lastLine = oldLines.last!.trimmingCharacters(in: .whitespacesAndNewlines)
+        return structuralMatches.count == 1 ? structuralMatches[0] : nil
+    }
 
-            var matchingIndices: [Int] = []
-            for (idx, line) in fullLines.enumerated() {
-                if line.trimmingCharacters(in: .whitespacesAndNewlines) == firstLine {
-                    matchingIndices.append(idx)
-                }
-            }
+    private static func canonicalLine(_ line: String) -> String {
+        line.split(whereSeparator: { $0.isWhitespace })
+            .joined(separator: " ")
+    }
 
-            for startLine in matchingIndices {
-                let expectedEnd = startLine + oldLines.count - 1
-                if expectedEnd < fullLines.count {
-                    if fullLines[expectedEnd].trimmingCharacters(in: .whitespacesAndNewlines) == lastLine {
-                        if let startIdx = lineIndex(to: startLine, in: fullText),
-                           let endIdx = lineIndex(to: expectedEnd + 1, in: fullText, isEnd: true) {
-                            return startIdx..<endIdx
-                        }
-                    }
-                }
-            }
+    private static func allRanges(
+        of needle: String,
+        in haystack: String
+    ) -> [Range<String.Index>] {
+        guard !needle.isEmpty else { return [] }
+        var matches: [Range<String.Index>] = []
+        var cursor = haystack.startIndex
+        while cursor < haystack.endIndex,
+              let range = haystack.range(of: needle, range: cursor..<haystack.endIndex) {
+            matches.append(range)
+            cursor = range.upperBound
         }
-
-        return nil
+        return matches
     }
 
     private static func lineIndex(to lineNum: Int, in text: String, isEnd: Bool = false) -> String.Index? {
@@ -361,7 +360,9 @@ final class Workspace: @unchecked Sendable {
 
         // ИСПОЛЬЗУЕМ КУРСОРОВСКИЙ УМНЫЙ МАТЧЕР
         guard let range = SmartBlockMatcher.findRange(of: old, in: text) else {
-            throw CLIError("old text block not found in \(path). Make sure to provide 2-3 exact surrounding lines as context.")
+            throw CLIError(
+                "unique edit target not found in \(path); reread the current file and retry with edit_file_range using exact line numbers"
+            )
         }
 
         var updated = text
@@ -580,6 +581,8 @@ final class Workspace: @unchecked Sendable {
 
         let ext = url.pathExtension.lowercased()
         switch ext {
+        case "html", "htm":
+            return try validateHTML(url, path: path)
         case "swift":
             guard let swiftc = runtime.executables["swiftc"] else { throw CLIError("swiftc is not available") }
             _ = try run(swiftc, ["-parse", url.path], 60)
@@ -599,17 +602,159 @@ final class Workspace: @unchecked Sendable {
             guard let node = runtime.executables["node"] else { throw CLIError("node is not available") }
             _ = try run(node, ["--check", url.path], 30)
             return "javascript syntax valid: \(path)"
+        case "rb":
+            guard let ruby = runtime.executables["ruby"] else { throw CLIError("ruby is not available") }
+            _ = try run(ruby, ["-c", url.path], 30)
+            return "ruby syntax valid: \(path)"
+        case "php":
+            guard let php = runtime.executables["php"] else { throw CLIError("php is not available") }
+            _ = try run(php, ["-l", url.path], 30)
+            return "PHP syntax valid: \(path)"
+        case "sh", "bash", "zsh":
+            let shellName = ext == "sh" ? "zsh" : ext
+            guard let shell = runtime.executables[shellName] else {
+                throw CLIError("\(shellName) is not available")
+            }
+            _ = try run(shell, ["-n", url.path], 30)
+            return "shell syntax valid: \(path)"
         default:
-            return "syntax validation skipped for .\(ext)"
+            throw CLIError("no deterministic validator for .\(ext)")
         }
     }
 
-    func openFile(_ path: String) throws -> String {
+    private func validateHTML(_ url: URL, path: String) throws -> String {
+        let text = try String(contentsOf: url, encoding: .utf8)
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw CLIError("HTML file is empty: \(path)")
+        }
+
+        let lower = text.lowercased()
+        if lower.contains("<html"), !lower.contains("</html>") {
+            throw CLIError("HTML validation failed: missing </html> in \(path)")
+        }
+        if lower.contains("<body"), !lower.contains("</body>") {
+            throw CLIError("HTML validation failed: missing </body> in \(path)")
+        }
+
+        let imagePattern = #"<img\b[^>]*\bsrc\s*=\s*([\"'])(.*?)\1[^>]*>"#
+        if lower.contains("<img") {
+            guard let regex = try? NSRegularExpression(
+                pattern: imagePattern,
+                options: [.caseInsensitive]
+            ) else {
+                throw CLIError("HTML image validator is unavailable")
+            }
+            let range = NSRange(text.startIndex..., in: text)
+            let matches = regex.matches(in: text, range: range)
+            guard !matches.isEmpty else {
+                throw CLIError("HTML validation failed: <img> has no quoted src in \(path)")
+            }
+            for match in matches {
+                guard let srcRange = Range(match.range(at: 2), in: text),
+                      !text[srcRange].trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw CLIError("HTML validation failed: <img> has an empty src in \(path)")
+                }
+            }
+        }
+
+        return "HTML structure valid: \(path)"
+    }
+
+    func openFile(
+        _ path: String,
+        application requestedApplication: String? = nil
+    ) throws -> String {
         try policy.authorize(tool: "open_file", risk: .shell)
         let url = try resolve(path)
         let executable = runtime.executables["open"] ?? "/usr/bin/open"
+
+        if let requestedApplication,
+           !requestedApplication.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let application = try resolveInstalledApplication(requestedApplication)
+            _ = try run(executable, ["-a", application.path, url.path], 15)
+            return "opened \(path)"
+        }
+
+        let ext = url.pathExtension.lowercased()
+
+        if ext == "html" || ext == "htm" {
+            // Opening the same file path in Safari may only focus an existing tab,
+            // leaving the pre-edit page visible. A harmless query makes every launch
+            // a fresh navigation while the browser still reads the same local file.
+            let freshURL = url.appending(
+                queryItems: [
+                    URLQueryItem(
+                        name: "slta_reload",
+                        value: String(Int(Date().timeIntervalSince1970 * 1_000))
+                    )
+                ]
+            )
+            _ = try run(executable, [freshURL.absoluteString], 15)
+            return "opened fresh \(path)"
+        }
+
         _ = try run(executable, [url.path], 15)
         return "opened \(path)"
+    }
+
+    private func resolveInstalledApplication(_ requested: String) throws -> URL {
+        let requestedKey = applicationKey(requested)
+        let requestedTokens = Set(requestedKey.split(separator: " ").map(String.init))
+        guard !requestedKey.isEmpty else {
+            throw CLIError("Не указано приложение для открытия файла")
+        }
+
+        let roots = [
+            URL(fileURLWithPath: "/Applications", isDirectory: true),
+            URL(fileURLWithPath: "/System/Applications", isDirectory: true),
+            URL(fileURLWithPath: FileManager.default.homeDirectoryForCurrentUser.path)
+                .appendingPathComponent("Applications", isDirectory: true)
+        ]
+        var candidates: [(url: URL, score: Int, name: String)] = []
+
+        for root in roots where FileManager.default.fileExists(atPath: root.path) {
+            guard let enumerator = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isApplicationKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { continue }
+
+            for case let url as URL in enumerator where url.pathExtension.lowercased() == "app" {
+                let name = url.deletingPathExtension().lastPathComponent
+                let nameKey = applicationKey(name)
+                let nameTokens = Set(nameKey.split(separator: " ").map(String.init))
+                let bundleKey = Bundle(url: url)?.bundleIdentifier.map(applicationKey) ?? ""
+
+                let score: Int
+                if requestedKey == nameKey || requestedKey == bundleKey {
+                    score = 1_000
+                } else if !requestedTokens.isEmpty && requestedTokens.isSubset(of: nameTokens) {
+                    score = 800 - max(0, nameTokens.count - requestedTokens.count)
+                } else if nameKey.contains(requestedKey) || bundleKey.contains(requestedKey) {
+                    score = 600 - abs(nameKey.count - requestedKey.count)
+                } else {
+                    continue
+                }
+                candidates.append((url, score, name))
+            }
+        }
+
+        guard let match = candidates.max(by: {
+            if $0.score == $1.score { return $0.name.count > $1.name.count }
+            return $0.score < $1.score
+        }) else {
+            throw CLIError("Приложение «\(requested)» не найдено на этом Mac")
+        }
+        return match.url
+    }
+
+    private func applicationKey(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
     }
 
     func openURL(_ value: String) throws -> String {

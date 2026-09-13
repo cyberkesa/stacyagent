@@ -408,6 +408,9 @@ final class MLXModelAdapter: @unchecked Sendable {
                     invocations,
                     allowed: semanticAllowed
                 )
+                if !executed.isEmpty {
+                    consecutiveNoProgressPasses = 0
+                }
 
                 var results = evidenceBlocks(executed)
                 var taskState = await registry.taskSnapshot()

@@ -12,6 +12,24 @@ enum Qwen3CoderParseResult: Sendable {
 }
 
 enum Qwen3CoderProtocol {
+    /// Detects a concrete implementation artifact in ordinary prose. This is an
+    /// output-shape check, not natural-language intent matching: a CHAT turn that
+    /// emits source code while a project is in focus crossed the execution boundary.
+    static func containsImplementationArtifact(_ text: String) -> Bool {
+        let fencedSource = #"(?s)```[^\n]*\n.+?```"#
+        if let regex = try? NSRegularExpression(pattern: fencedSource),
+           regex.firstMatch(
+            in: text,
+            range: NSRange(text.startIndex..., in: text)
+           ) != nil {
+            return true
+        }
+
+        let lower = text.lowercased()
+        return (lower.contains("<!doctype html") || lower.contains("<html")) &&
+            lower.contains("</html>")
+    }
+
     static func analyze(_ text: String) -> Qwen3CoderParseResult {
         var invocations: [Qwen3CoderInvocation] = []
 
@@ -40,11 +58,6 @@ enum Qwen3CoderProtocol {
             }
         }
 
-        // 5. SMART FALLBACK: Если модель вывела код в markdown блоке ```lang ... ``` вместо тега
-        if invocations.isEmpty, let codeBlockInv = extractCodeBlockInvocation(text) {
-            invocations.append(codeBlockInv)
-        }
-
         if !invocations.isEmpty {
             return .complete(invocations)
         }
@@ -57,8 +70,6 @@ enum Qwen3CoderProtocol {
         return .none
     }
 
-    // MARK: - Экранирование переносов строк внутри JSON-строк
-    // Исправляет падение JSONSerialization (ошибка 3840) на многострочном HTML/коде
     private static func sanitizeJSONString(_ input: String) -> String {
         var output = ""
         output.reserveCapacity(input.count + 64)
@@ -82,25 +93,15 @@ enum Qwen3CoderProtocol {
                 continue
             }
             if inString {
-                if char == "\n" {
-                    output.append("\\n")
-                    continue
-                }
-                if char == "\r" {
-                    output.append("\\r")
-                    continue
-                }
-                if char == "\t" {
-                    output.append("\\t")
-                    continue
-                }
+                if char == "\n" { output.append("\\n"); continue }
+                if char == "\r" { output.append("\\r"); continue }
+                if char == "\t" { output.append("\\t"); continue }
             }
             output.append(char)
         }
         return output
     }
 
-    // MARK: - Парсинг блоков <tool_call>...</tool_call>
     private static func parseToolCallBlocks(_ text: String) -> [Qwen3CoderInvocation] {
         var results: [Qwen3CoderInvocation] = []
         var cursor = text.startIndex
@@ -123,7 +124,6 @@ enum Qwen3CoderProtocol {
         return results
     }
 
-    // MARK: - Парсинг XML <function=...>
     private static func parseCompleteFunctions(_ text: String) -> [Qwen3CoderInvocation] {
         var invocations: [Qwen3CoderInvocation] = []
         var cursor = text.startIndex
@@ -167,6 +167,11 @@ enum Qwen3CoderProtocol {
         }
 
         let body = String(text[bodyStart..<bodyEnd])
+        let lowerBody = body.lowercased()
+        guard lowerBody.components(separatedBy: "<parameter=").count ==
+                lowerBody.components(separatedBy: "</parameter>").count else {
+            return nil
+        }
         let args = parseXMLParameters(body)
         guard !args.isEmpty else { return nil }
 
@@ -207,7 +212,6 @@ enum Qwen3CoderProtocol {
         return result
     }
 
-    // MARK: - Парсинг JSON
     private static func parseAllJSONInvocations(_ text: String) -> [Qwen3CoderInvocation] {
         var results: [Qwen3CoderInvocation] = []
         var searchRange = text.startIndex..<text.endIndex
@@ -297,49 +301,6 @@ enum Qwen3CoderProtocol {
             }
         }
         return result
-    }
-
-    // MARK: - Извлечение кода из Markdown ```lang ... ``` при отсутствии тегов
-    private static func extractCodeBlockInvocation(_ text: String) -> Qwen3CoderInvocation? {
-        let pattern = #"```([a-zA-Z0-9_\-\.]+)?\n([\s\S]+?)```"#
-        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return nil }
-        let range = NSRange(text.startIndex..., in: text)
-        guard let match = regex.firstMatch(in: text, options: [], range: range),
-              let codeRange = Range(match.range(at: 2), in: text) else {
-            return nil
-        }
-
-        let code = String(text[codeRange])
-        var lang = ""
-        if let langRange = Range(match.range(at: 1), in: text) {
-            lang = String(text[langRange]).lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        }
-
-        let filePattern = #"\b([a-zA-Z0-9_\-]+\.(html|htm|css|js|ts|py|swift|json|sh|md|txt))\b"#
-        var detectedPath = ""
-        if let fileRegex = try? NSRegularExpression(pattern: filePattern, options: [.caseInsensitive]) {
-            if let fileMatch = fileRegex.firstMatch(in: text, options: [], range: range),
-               let pathRange = Range(fileMatch.range(at: 1), in: text) {
-                detectedPath = String(text[pathRange])
-            }
-        }
-
-        if detectedPath.isEmpty {
-            switch lang {
-            case "html", "htm": detectedPath = "index.html"
-            case "swift": detectedPath = "main.swift"
-            case "py", "python": detectedPath = "script.py"
-            case "js", "javascript": detectedPath = "index.js"
-            case "css": detectedPath = "style.css"
-            case "json": detectedPath = "data.json"
-            default: detectedPath = "pink.html"
-            }
-        }
-
-        return .init(name: "write_file", arguments: [
-            "path": detectedPath,
-            "content": code
-        ])
     }
 
     static func removingToolMarkup(from text: String) -> String {

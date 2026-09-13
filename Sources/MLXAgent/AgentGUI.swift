@@ -287,10 +287,10 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
                 await MainActor.run {
                     self.ensureAssistantBubble()
                     if var last = self.messages.last, last.role == .assistant {
-                        let hasSuccessfulTools = last.toolCalls.contains { $0.isSuccess == true }
-                        if !hasSuccessfulTools {
-                            last.text += "\n❌ Ошибка: \(error.localizedDescription)"
-                        }
+                        let message = error is CancellationError
+                            ? "⏹ Задача остановлена."
+                            : "❌ Ошибка: \(error.localizedDescription)"
+                        last.text += (last.text.isEmpty ? "" : "\n") + message
                         self.messages[self.messages.count - 1] = last
                     }
                     self.isRunning = false
@@ -303,15 +303,28 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
 
     func stop() {
         taskHandle?.cancel()
-        isRunning = false
-        activeTask = nil
-        activeToolName = nil
-        liveThinkingLabel = nil
+        liveThinkingLabel = "Останавливаю задачу…"
     }
 
     func clearHistory() {
         messages.removeAll()
         Task { await agent?.clear() }
+    }
+
+        func copyFullChat() {
+        var lines: [String] = []
+        for msg in messages {
+            let role = (msg.role == .user) ? "Вы" : "Stacy Agent"
+            var block = "[\(role)]:\n" + msg.text
+            if !msg.imageURLs.isEmpty {
+                let imgs = msg.imageURLs.map { $0.absoluteString }.joined(separator: ", ")
+                block += "\n[Картинки: " + imgs + "]"
+            }
+            lines.append(block)
+        }
+        let history = lines.joined(separator: "\n\n---\n\n")
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(history, forType: .string)
     }
 
     func copyToClipboard(_ text: String) {
@@ -385,6 +398,23 @@ struct SLTAMainWindowView: View {
                     }
 
                     Spacer()
+
+                    Button(action: vm.copyFullChat) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "doc.on.doc")
+                            Text("Копия чата")
+                        }
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(StacyTheme.textMuted)
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 5)
+                        .background(Color.white)
+                        .clipShape(RoundedRectangle(cornerRadius: 6))
+                        .overlay(RoundedRectangle(cornerRadius: 6).stroke(StacyTheme.cardBorder, lineWidth: 1))
+                    }
+                    .buttonStyle(.plain)
+                    .help("Скопировать весь диалог для отправки (⌘⇧C)")
+                    .keyboardShortcut("c", modifiers: [.command, .shift])
 
                     Button(action: vm.clearHistory) {
                         HStack(spacing: 4) {
