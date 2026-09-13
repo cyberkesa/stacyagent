@@ -25,6 +25,12 @@ struct SessionTurn: Sendable {
     let status: String
 }
 
+/// v0.29: conversational DISPLAY/CACHE projection only — NOT operational truth.
+/// Completion, validation and observation truth lives in
+/// RuntimeState + ArtifactGraph + EvidenceStore (revision-aware).
+/// These flags feed diagnostics ("known artifacts: a.html [read,mutated]")
+/// and conversational continuity, never ProtocolEngine decisions.
+/// Do NOT add new operational booleans here.
 struct ArtifactProjection: Sendable {
     var ref: ArtifactRef
     var wasRead = false

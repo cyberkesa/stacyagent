@@ -66,22 +66,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
                 let events = EventBus(sink: self.vm)
                 let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime)
-                let model = try await MLXModelAdapter(
+                // v0.29: restore revision-aware runtime truth (graph + evidence).
+                _ = await registry.restoreRuntime()
+                // v0.28 boundary: Workspace/MCP/ToolRegistry -> MLXProvider ->
+                // RuntimeCoordinator -> AgentLoop. The runtime never depends
+                // on the model adapter.
+                let provider = try await MLXProvider(
                     modelID: options.modelID,
-                    projectURL: options.projectURL,
-                    registry: registry,
+                    draftModelID: options.draftModelID,
                     events: events,
                     chatMaxTokens: options.chatMaxTokens,
                     agentMaxTokens: options.agentMaxTokens,
                     timeoutSeconds: options.generationTimeoutSeconds,
-                    controllerTimeoutSeconds: options.controllerTimeoutSeconds,
-                    draftModelID: options.draftModelID
+                    controllerTimeoutSeconds: options.controllerTimeoutSeconds
+                )
+                let coordinator = RuntimeCoordinator(
+                    executor: registry,
+                    events: events,
+                    projectInstructions: ProjectInstructions.load(root: options.projectURL)
                 )
                 let agent = AgentLoop(
-                    model: model,
+                    mlx: provider,
+                    coordinator: coordinator,
                     registry: registry,
                     events: events,
-                    maxRounds: options.maxRounds
+                    maxRounds: options.maxRounds,
+                    chatMaxTokens: options.chatMaxTokens,
+                    agentMaxTokens: options.agentMaxTokens
                 )
 
                 await MainActor.run {
@@ -112,22 +123,31 @@ func runCLIMode() {
             let workspace = Workspace(root: options.projectURL, shellTimeoutSeconds: options.shellTimeoutSeconds, policy: policy, runtime: runtime)
             let mcp = MCPBridge(policy: policy)
             let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime)
-            let model = try await MLXModelAdapter(
+            // v0.29: restore revision-aware runtime truth (graph + evidence).
+            _ = await registry.restoreRuntime()
+            // v0.28 boundary (same as GUI wiring above).
+            let provider = try await MLXProvider(
                 modelID: options.modelID,
-                projectURL: options.projectURL,
-                registry: registry,
+                draftModelID: options.draftModelID,
                 events: events,
                 chatMaxTokens: options.chatMaxTokens,
                 agentMaxTokens: options.agentMaxTokens,
                 timeoutSeconds: options.generationTimeoutSeconds,
-                controllerTimeoutSeconds: options.controllerTimeoutSeconds,
-                draftModelID: options.draftModelID
+                controllerTimeoutSeconds: options.controllerTimeoutSeconds
+            )
+            let coordinator = RuntimeCoordinator(
+                executor: registry,
+                events: events,
+                projectInstructions: ProjectInstructions.load(root: options.projectURL)
             )
             let agent = AgentLoop(
-                model: model,
+                mlx: provider,
+                coordinator: coordinator,
                 registry: registry,
                 events: events,
-                maxRounds: options.maxRounds
+                maxRounds: options.maxRounds,
+                chatMaxTokens: options.chatMaxTokens,
+                agentMaxTokens: options.agentMaxTokens
             )
 
             TerminalRenderer.banner(

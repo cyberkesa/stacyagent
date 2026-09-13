@@ -1,79 +1,41 @@
 import Foundation
-import MLXLMCommon
+import SLTACore
 
-final class TurnController: @unchecked Sendable {
-    private let model: ModelContainer
-    private let timeoutSeconds: Int
+// v0.28: the ModelContainer-based classifier moved into MLXProvider
+// (MLXProvider.classify). This file keeps the runtime-owned, model-free
+// routing: FastTurnRouter, RouteSafety and the pure TurnModeParser.
+// No MLX imports here by design.
 
-    init(model: ModelContainer, timeoutSeconds: Int) {
-        self.model = model
-        self.timeoutSeconds = timeoutSeconds
-    }
-
-    func decide(
-        _ userText: String,
-        sessionContext: String = ""
-    ) async throws -> TurnDecision {
-        if let fast = FastTurnRouter.decide(userText) {
-            return fast
-        }
-
-        let session = ChatSession(
-            model,
-            instructions: SystemPrompt.controller,
-            generateParameters: GenerateParameters(
-                maxTokens: 8,
-                temperature: 0.0,
-                topP: 1.0,
-                repetitionPenalty: 1.04,
-                repetitionContextSize: 24
-            )
-        )
-
-        let routedPrompt: String
-        if sessionContext.isEmpty {
-            routedPrompt = userText
-        } else {
-            routedPrompt = """
-            \(sessionContext)
-
-            CURRENT USER MESSAGE:
-            \(userText)
-
-            Classify the CURRENT USER MESSAGE, resolving short follow-ups against the session context.
-            """
-        }
-
-        let responseStream = session.streamResponse(to: routedPrompt)
-        let timeout = timeoutSeconds
-
-        let raw = try await withThrowingTaskGroup(of: String.self) { group in
-            group.addTask {
-                var output = ""
-                for try await chunk in responseStream { output += chunk }
-                return output
-            }
-            group.addTask {
-                try await Task.sleep(for: .seconds(timeout))
-                throw CLIError("turn controller timed out after \(timeout)s")
-            }
-            guard let value = try await group.next() else {
-                throw CLIError("turn controller returned no decision")
-            }
-            group.cancelAll()
-            return value
-        }
-
+/// Pure runtime-owned parser for the controller model's raw text.
+/// The inference itself runs inside the ModelProvider; mode extraction is
+/// deterministic runtime policy (no model judgment here).
+enum TurnModeParser {
+    static func parse(_ raw: String) -> TurnDecision {
         let upper = raw.uppercased()
         for mode in [TurnMode.mcpAgent, .mcpRead, .agent, .inspect, .chat] {
             if upper.contains(mode.rawValue) { return .forMode(mode, source: .model) }
         }
         return .forMode(.chat, source: .model)
     }
+
+    static func routePrompt(userText: String, sessionContext: String) -> String {
+        if sessionContext.isEmpty {
+            return userText
+        }
+        return """
+        \(sessionContext)
+
+        CURRENT USER MESSAGE:
+        \(userText)
+
+        Classify the CURRENT USER MESSAGE, resolving short follow-ups against the session context.
+        """
+    }
 }
 
 /// Enforces the boundary between conversation and project execution using the
 /// model's output shape. It does not depend on particular user phrases.
+/// Uses the provider-agnostic artifact check (no Qwen-specific types here).
 enum RouteSafety {
     static func correctedDecision(
         routed: TurnDecision,
@@ -82,7 +44,7 @@ enum RouteSafety {
     ) -> TurnDecision? {
         guard routed.mode == .chat,
               hasProjectContext,
-              Qwen3CoderProtocol.containsImplementationArtifact(draftResponse) else {
+              ProviderArtifactCheck.containsImplementationArtifact(draftResponse) else {
             return nil
         }
         return .forMode(.agent, source: .model)

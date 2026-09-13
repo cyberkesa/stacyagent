@@ -1,0 +1,5 @@
+--swiftversion 6.2
+--indent 4
+--maxwidth 140
+--self insert
+--importgrouping alpha

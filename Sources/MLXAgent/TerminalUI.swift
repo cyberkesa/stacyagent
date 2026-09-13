@@ -109,6 +109,39 @@ actor TerminalRenderer: AgentEventSink {
             print("")
             print("  "+TerminalStyle.green("✓")+" "+TerminalStyle.pink("done")+TerminalStyle.dim("  "+pieces.joined(separator:" · ")))
             print("  "+TerminalStyle.dim(String(format:"model %.2fs · tools %.2fs · route %.2fs %@",stats.modelSeconds,stats.toolSeconds,stats.routerSeconds,stats.routeSource?.rawValue ?? "")))
+        case .taskCompiled(let taskID):
+            print("  " + TerminalStyle.dim("· task compiled \(taskID)"))
+        case .taskStateChanged(let taskID, let phase):
+            print("  " + TerminalStyle.dim("· task \(taskID) → \(phase)"))
+        case .protocolDecision(_, let decision):
+            print("  " + TerminalStyle.dim("· \(decision)"))
+        case .intelligenceStarted(_, let kind):
+            live("thinking \(kind)", seconds: 0, chunks: 0)
+        case .intelligenceFinished(_, let provider, let seconds):
+            clearLive()
+            print("  " + TerminalStyle.dim(String(format: "· %@ %.1fs", provider, seconds)))
+        case .proposalCreated(_, let path):
+            print("  " + TerminalStyle.dim("· proposal \(path)"))
+        case .transactionApplied(_, let path, let transaction):
+            print("  " + TerminalStyle.dim("· applied \(path) \(transaction)"))
+        case .validationFinished(let path, let ok):
+            print("  " + TerminalStyle.dim("· validate \(path) \(ok ? "ok" : "failed")"))
+        case .taskCompleted(let taskID):
+            print("  " + TerminalStyle.dim("· task completed \(taskID)"))
+        case .taskBlocked(let taskID, let reason):
+            print("  " + TerminalStyle.yellow("! ") + TerminalStyle.dim("task \(taskID) blocked: \(reason)"))
+        case .artifactRevisionCreated(_, let path, let revision):
+            print("  " + TerminalStyle.dim("· revision \(path) → \(revision)"))
+        case .artifactExternalChangeDetected(let path, let revision):
+            print("  " + TerminalStyle.yellow("! ") + TerminalStyle.dim("external change \(path) → \(revision)"))
+        case .evidenceRecorded(_, let kind, let path):
+            print("  " + TerminalStyle.dim("· evidence \(kind)" + (path.map { " \($0)" } ?? "")))
+        case .evidenceBecameStale(_, let path):
+            print("  " + TerminalStyle.dim("· stale evidence \(path)"))
+        case .runtimeStatePersisted(let projectID):
+            print("  " + TerminalStyle.dim("· runtime persisted \(projectID)"))
+        case .runtimeStateRestored(let projectID):
+            print("  " + TerminalStyle.dim("· runtime restored \(projectID)"))
         }
     }
 

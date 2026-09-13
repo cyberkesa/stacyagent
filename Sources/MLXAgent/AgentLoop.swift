@@ -1,34 +1,54 @@
 import Foundation
+import SLTACore
+
+// MARK: - v0.28 AgentLoop (thin turn layer)
+//
+// Owns: user turn intake, ConversationDirectRouter, conversational
+// continuity (SessionContext), TaskCompiler/turn routing, chat turns,
+// delegating project tasks to RuntimeCoordinator, SessionContext writes,
+// UI events.
+//
+// Does NOT own: model/task execution lifecycle (RuntimeCoordinator),
+// completion policy (ProtocolEngine), tool execution (ToolRegistry).
 
 final class AgentLoop: @unchecked Sendable {
-    private let model: MLXModelAdapter
+    private let mlx: MLXProvider
+    private let coordinator: RuntimeCoordinator
     private let registry: ToolRegistry
     private let events: EventBus
     private let maxRounds: Int
+    private let chatMaxTokens: Int?
+    private let agentMaxTokens: Int?
     private let sessionContext: SessionContext
 
     private var lastStats: GenerationStats?
     private var sessionName: String?
 
     init(
-        model: MLXModelAdapter,
+        mlx: MLXProvider,
+        coordinator: RuntimeCoordinator,
         registry: ToolRegistry,
         events: EventBus,
-        maxRounds: Int
+        maxRounds: Int,
+        chatMaxTokens: Int? = nil,
+        agentMaxTokens: Int? = nil
     ) {
-        self.model = model
+        self.mlx = mlx
+        self.coordinator = coordinator
         self.registry = registry
         self.events = events
         self.maxRounds = maxRounds
+        self.chatMaxTokens = chatMaxTokens
+        self.agentMaxTokens = agentMaxTokens
         self.sessionContext = SessionContext(projectPath: registry.projectPath)
     }
 
     func toggleDebug() -> Bool {
-        model.toggleDebug()
+        mlx.toggleDebug()
     }
 
     func clear() async {
-        await model.clear()
+        mlx.endTaskSession()
         await registry.state.resetTask()
         await sessionContext.clear()
         sessionName = nil
@@ -114,11 +134,16 @@ final class AgentLoop: @unchecked Sendable {
 
         if let continuationDecision = sessionBefore.continuationDecision(for: task) {
             decision = continuationDecision
+        } else if let fast = FastTurnRouter.decide(task) {
+            decision = fast
         } else {
-            decision = try await model.route(
+            // Single model generation owned by the provider; mode parsing is
+            // deterministic runtime policy.
+            let raw = try await mlx.classify(
                 task,
                 sessionContext: sessionBefore.routerContext(currentUserText: task)
             )
+            decision = TurnModeParser.parse(raw)
         }
 
         stats.routerSeconds = Self.seconds(ContinuousClock.now - routeStarted)
@@ -135,7 +160,7 @@ final class AgentLoop: @unchecked Sendable {
 
         if decision.mode == .chat {
             stats.taskStatus = "chat"
-            let answer = try await model.respondChat(to: task, sessionContext: promptContext, stats: &stats)
+            let answer = try await respondChat(to: task, sessionContext: promptContext, stats: &stats)
             let clean = answer.trimmingCharacters(in: .whitespacesAndNewlines)
 
             if let corrected = RouteSafety.correctedDecision(
@@ -172,16 +197,26 @@ final class AgentLoop: @unchecked Sendable {
         }
 
         await registry.beginTask(task, decision: decision, continuity: continuity)
+        let compiled = await registry.taskSnapshot()
+        if let spec = compiled.spec {
+            await events.emit(.taskCompiled(taskID: "\(spec.id)"))
+        }
 
-        let response: String
+        let allowed = registry.allowedToolNames(for: decision.capabilities)
+        let taskInput = RuntimeTaskInput(
+            userText: task,
+            decision: decision,
+            maxRounds: maxRounds,
+            sessionExcerpt: promptContext,
+            projectInstructions: "",
+            runtimeContext: registry.runtimeContext,
+            allowedTools: allowed,
+            agentMaxTokens: agentMaxTokens
+        )
+
+        let result: RuntimeTaskResult
         do {
-            response = try await model.respondTask(
-                to: task,
-                decision: decision,
-                maxPasses: maxRounds,
-                sessionContext: promptContext,
-                stats: &stats
-            )
+            result = try await coordinator.run(taskInput, provider: mlx)
         } catch {
             let failedState = await registry.taskSnapshot()
             await sessionContext.recordProject(
@@ -194,15 +229,28 @@ final class AgentLoop: @unchecked Sendable {
             throw error
         }
 
-        let taskState = await registry.taskSnapshot()
+        // Aggregate per-physical-generation telemetry. passes now means
+        // physical model generations — never conflated with tool calls.
+        for call in result.providerCalls {
+            stats.modelSeconds += call.durationSeconds
+            stats.promptTokens += call.promptTokens ?? 0
+            stats.outputTokens += call.outputTokens ?? 0
+            if stats.firstTokenSeconds == nil {
+                stats.firstTokenSeconds = call.firstTokenSeconds
+            }
+        }
+        stats.passes = result.physicalGenerations
         stats.tools = await registry.state.tools()
         stats.toolSeconds = await registry.state.toolSeconds()
+
+        let taskState = result.snapshot
         stats.taskStatus = taskState.phase.rawValue
         stats.finish()
         lastStats = stats
 
-        let clean = response.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard taskState.isComplete else {
+        let clean = result.displayText.trimmingCharacters(in: .whitespacesAndNewlines)
+        switch result.outcome {
+        case .blocked(let reason):
             await sessionContext.recordProject(
                 user: task,
                 assistant: "",
@@ -210,7 +258,20 @@ final class AgentLoop: @unchecked Sendable {
                 task: taskState,
                 continuity: continuity
             )
-            throw CLIError("Задача не завершена: \(taskState.incompleteReason)")
+            throw CLIError("Задача заблокирована: \(reason)")
+        case .incomplete:
+            guard taskState.isComplete else {
+                await sessionContext.recordProject(
+                    user: task,
+                    assistant: "",
+                    decision: decision,
+                    task: taskState,
+                    continuity: continuity
+                )
+                throw CLIError("Задача не завершена: \(taskState.incompleteReason)")
+            }
+        case .completedDeterministic, .completedSynthesis:
+            break
         }
 
         if !clean.isEmpty {
@@ -224,8 +285,37 @@ final class AgentLoop: @unchecked Sendable {
             task: taskState,
             continuity: continuity
         )
+        // v0.29: persist revision-aware truth for crash/restart recovery.
+        await registry.persistRuntime()
 
         await events.emit(.completed(stats))
+    }
+
+    /// Single chat generation through the provider (no tools, no task loop).
+    private func respondChat(
+        to text: String,
+        sessionContext: String,
+        stats: inout GenerationStats
+    ) async throws -> String {
+        let instructions = sessionContext.isEmpty
+            ? SystemPrompt.identity
+            : SystemPrompt.identity + "\n\n" + sessionContext
+        let request = ModelRequest(
+            purpose: .chat,
+            instructions: instructions,
+            prompt: text,
+            tools: [],
+            maxTokens: chatMaxTokens
+        )
+        let response = try await mlx.generate(request)
+        stats.passes += 1
+        stats.modelSeconds += response.telemetry.durationSeconds
+        stats.promptTokens += response.telemetry.promptTokens ?? 0
+        stats.outputTokens += response.telemetry.outputTokens ?? 0
+        if stats.firstTokenSeconds == nil {
+            stats.firstTokenSeconds = response.telemetry.firstTokenSeconds
+        }
+        return response.text
     }
 
     private static func seconds(_ duration: Duration) -> Double {

@@ -1876,6 +1876,24 @@ for line in sys.stdin:
             failures.append("not-launched recovery deterministic relaunch")
         }
 
+        // v0.28 Runtime/ModelProvider boundary scenarios A-G (+H).
+        for result in await CoordinatorSelfTest.runAll() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
+        // v0.29 ArtifactGraph / Evidence / Persistence scenarios A-J.
+        for result in await ArtifactSelfTest.runAll() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
         let total = passed + failures.count
         if failures.isEmpty {
             return "SLTA self-test: PASS \(passed)/\(total)"

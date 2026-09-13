@@ -1,4 +1,5 @@
 import Foundation
+import SLTACore
 import MLXLMCommon
 
 final class ToolRegistry: @unchecked Sendable {
@@ -296,7 +297,13 @@ final class ToolRegistry: @unchecked Sendable {
     }
 
     func schemas(named allowed: Set<String>) -> [MLXLMCommon.ToolSpec] {
-        let pairs: [(String, MLXLMCommon.ToolSpec)] = [
+        allSchemas.compactMap { allowed.contains($0.0) ? $0.1 : nil }
+    }
+
+    /// All owned tool schemas in one place (shared by MLX-native and
+    /// provider-independent boundaries).
+    private var allSchemas: [(String, MLXLMCommon.ToolSpec)] {
+        [
             (listDirTool.name, listDirTool.schema),
             (readFileTool.name, readFileTool.schema),
             (readFileRangeTool.name, readFileRangeTool.schema),
@@ -315,7 +322,53 @@ final class ToolRegistry: @unchecked Sendable {
             (tavilySearchTool.name, tavilySearchTool.schema),
             (mcpCallTool.name, mcpCallTool.schema)
         ]
-        return pairs.compactMap { allowed.contains($0.0) ? $0.1 : nil }
+    }
+
+    /// Model-independent tool schemas for the Runtime -> ModelProvider
+    /// boundary. The MLX-native ToolSpec dicts are converted to plain
+    /// JSON-Schema strings here (runtime side); providers convert back to
+    /// their native format. No MLX types leak into ModelRequest.
+    func providerToolSpecs(named allowed: Set<String>) -> [ProviderToolSpec] {
+        allSchemas.compactMap { name, schema -> ProviderToolSpec? in
+            guard allowed.contains(name) else { return nil }
+            let function = schema["function"] as? [String: any Sendable]
+            let description = function?["description"] as? String ?? ""
+            var parametersJSON = #"{"type":"object","properties":{}}"#
+            if let params = function?["parameters"] {
+                let anyParams = Self.jsonCompatible(params)
+                if JSONSerialization.isValidJSONObject(anyParams),
+                   let data = try? JSONSerialization.data(withJSONObject: anyParams),
+                   let text = String(data: data, encoding: .utf8) {
+                    parametersJSON = text
+                }
+            }
+            return ProviderToolSpec(name: name, description: description, parametersJSON: parametersJSON)
+        }
+    }
+
+    private static func jsonCompatible(_ value: any Sendable) -> Any {
+        if let dict = value as? [String: any Sendable] {
+            return dict.mapValues { jsonCompatible($0) }
+        }
+        if let array = value as? [any Sendable] {
+            return array.map { jsonCompatible($0) }
+        }
+        if let value = value as? String {
+            return value
+        }
+        if let value = value as? Bool {
+            return value
+        }
+        if let value = value as? Int {
+            return value
+        }
+        if let value = value as? Double {
+            return value
+        }
+        if let value = value as? NSNumber {
+            return value
+        }
+        return String(describing: value)
     }
 
     func execute(_ toolCall: MLXLMCommon.ToolCall, allowed: Set<String>) async -> String {
@@ -364,7 +417,11 @@ final class ToolRegistry: @unchecked Sendable {
                 let raw = try await toolCall.execute(with: readFileTool).toolResult
                 if let decoded = NativeToolEnvelope.decodeRead(raw) {
                     result = decoded.content
-                    await state.readBack(path: decoded.path, content: decoded.content)
+                    await state.readBack(
+                        path: decoded.path,
+                        content: decoded.content,
+                        revisionID: graphRevisionID(for: decoded.path)
+                    )
                 } else {
                     result = raw
                     await state.observation(name)
@@ -374,7 +431,11 @@ final class ToolRegistry: @unchecked Sendable {
                 let encoded = try await toolCall.execute(with: readFileRangeTool).toolResult
                 if let decoded = NativeToolEnvelope.decodeObservation(encoded) {
                     result = decoded.content
-                    await state.observation(name, path: decoded.path)
+                    await state.observation(
+                        name,
+                        path: decoded.path,
+                        revisionID: graphRevisionID(for: decoded.path)
+                    )
                 } else {
                     result = encoded
                     await state.observation(name)
@@ -387,7 +448,8 @@ final class ToolRegistry: @unchecked Sendable {
                     name,
                     result: result,
                     changed: !result.contains("unchanged "),
-                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) }
+                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) },
+                    revisionID: graphRevisionID(for: path)
                 )
 
             case editFileTool.name:
@@ -397,7 +459,8 @@ final class ToolRegistry: @unchecked Sendable {
                     name,
                     result: result,
                     changed: !result.contains("unchanged "),
-                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) }
+                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) },
+                    revisionID: graphRevisionID(for: path)
                 )
 
             case editFileRangeTool.name:
@@ -407,7 +470,8 @@ final class ToolRegistry: @unchecked Sendable {
                     name,
                     result: result,
                     changed: !result.contains("unchanged "),
-                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) }
+                    transaction: path.flatMap { workspace.latestEditReceipt(path: $0) },
+                    revisionID: graphRevisionID(for: path)
                 )
 
             case searchTool.name:
@@ -489,6 +553,7 @@ final class ToolRegistry: @unchecked Sendable {
 
             let elapsed = ContinuousClock.now - start
             await state.toolFinished(seconds: Self.seconds(elapsed))
+            await state.setCurrentRevisions(workspace.graph.currentMap())
             await events.emit(.toolFinished(
                 name: name,
                 ok: true,
@@ -508,6 +573,7 @@ final class ToolRegistry: @unchecked Sendable {
 
             let elapsed = ContinuousClock.now - start
             await state.toolFinished(seconds: Self.seconds(elapsed))
+            await state.setCurrentRevisions(workspace.graph.currentMap())
             await events.emit(.toolFinished(
                 name: name,
                 ok: false,
@@ -566,6 +632,38 @@ final class ToolRegistry: @unchecked Sendable {
         )
     }
 
+    /// Runtime-boundary batch execution for provider-normalized invocations.
+    /// Same stop semantics as the textual path: stop on completion/failure
+    /// and yield after a mutation that requires re-observation.
+    func executeInvocations(
+        _ invocations: [NormalizedToolInvocation],
+        allowed: Set<String>
+    ) async -> [(name: String, result: String)] {
+        var output: [(name: String, result: String)] = []
+        output.reserveCapacity(invocations.count)
+
+        for invocation in invocations {
+            let before = await state.taskSnapshot()
+            if before.isComplete || before.validation.lastToolFailed {
+                break
+            }
+
+            let result = await executeNormalized(invocation, allowed: allowed)
+            output.append((name: invocation.name, result: result))
+
+            let after = await state.taskSnapshot()
+            if after.isComplete || after.validation.lastToolFailed {
+                break
+            }
+
+            let mutating = SemanticToolCatalog.isMutating(invocation.name)
+            if mutating && ProtocolEngine.shouldYieldAfterMutation(after) {
+                break
+            }
+        }
+        return output
+    }
+
     func executeNormalized(
         _ invocation: NormalizedToolInvocation,
         allowed: Set<String>
@@ -574,6 +672,7 @@ final class ToolRegistry: @unchecked Sendable {
         let args = invocation.arguments
 
         let before = await state.taskSnapshot()
+        let taskID = before.spec.map { "\($0.id)" } ?? "no-task"
         if before.isComplete {
             return #"{"ok":true,"status":"task_already_complete","instruction":"Do not call more tools."}"#
         }
@@ -625,8 +724,13 @@ final class ToolRegistry: @unchecked Sendable {
 
             case "read_file":
                 guard let path = args["path"] else { throw CLIError("read_file requires path") }
+                let readKey = workspace.canonicalKey(path)
+                let readBefore = workspace.graph.currentRevisionID(path: readKey)
                 result = try workspace.readFile(path)
-                await state.readBack(path: path, content: result)
+                let readRev = workspace.graph.currentRevisionID(path: readKey)
+                await state.readBack(path: path, content: result, revisionID: readRev)
+                await emitExternalIfMoved(key: readKey, before: readBefore, taskID: taskID)
+                await events.emit(.evidenceRecorded(taskID: taskID, kind: "observed", path: path))
 
             case "read_file_range":
                 guard let path = args["path"],
@@ -634,21 +738,33 @@ final class ToolRegistry: @unchecked Sendable {
                       let end = Self.integralLine(args["end_line"]) else {
                     throw CLIError("read_file_range requires path, start_line, end_line")
                 }
+                let rangeKey = workspace.canonicalKey(path)
+                let rangeBefore = workspace.graph.currentRevisionID(path: rangeKey)
                 result = try workspace.readFileRange(path, startLine: start, endLine: end)
-                await state.observation(name, path: path)
+                await state.observation(
+                    name,
+                    path: path,
+                    revisionID: workspace.graph.currentRevisionID(path: rangeKey)
+                )
+                await emitExternalIfMoved(key: rangeKey, before: rangeBefore, taskID: taskID)
+                await events.emit(.evidenceRecorded(taskID: taskID, kind: "observed", path: path))
 
             case "write_file":
                 guard let path = args["path"], let content = args["content"] else {
                     throw CLIError("write_file requires path and content")
                 }
+                let writeKey = workspace.canonicalKey(path)
+                let writeBefore = workspace.graph.currentRevisionID(path: writeKey)
                 result = try workspace.writeFile(path, content: content)
                 await state.mutation(
                     name,
                     path: path,
                     content: content,
                     changed: !result.contains("unchanged "),
-                    transaction: workspace.latestEditReceipt(path: path)
+                    transaction: workspace.latestEditReceipt(path: path),
+                    revisionID: workspace.graph.currentRevisionID(path: writeKey)
                 )
+                await emitRevisionEvents(key: writeKey, before: writeBefore, taskID: taskID, kind: "mutation")
 
             case "edit_file":
                 guard let path = args["path"],
@@ -656,14 +772,18 @@ final class ToolRegistry: @unchecked Sendable {
                       let new = args["new"] ?? args["newText"] else {
                     throw CLIError("edit_file requires path, old, new")
                 }
+                let editKey = workspace.canonicalKey(path)
+                let editBefore = workspace.graph.currentRevisionID(path: editKey)
                 result = try workspace.editFile(path, old: old, new: new)
                 await state.mutation(
                     name,
                     path: path,
                     content: nil,
                     changed: !result.contains("unchanged "),
-                    transaction: workspace.latestEditReceipt(path: path)
+                    transaction: workspace.latestEditReceipt(path: path),
+                    revisionID: workspace.graph.currentRevisionID(path: editKey)
                 )
+                await emitRevisionEvents(key: editKey, before: editBefore, taskID: taskID, kind: "mutation")
 
             case "edit_file_range":
                 guard let path = args["path"],
@@ -672,14 +792,18 @@ final class ToolRegistry: @unchecked Sendable {
                       let replacement = args["replacement"] else {
                     throw CLIError("edit_file_range requires path, start_line, end_line, replacement")
                 }
+                let rangeEditKey = workspace.canonicalKey(path)
+                let rangeEditBefore = workspace.graph.currentRevisionID(path: rangeEditKey)
                 result = try workspace.editFileRange(path, startLine: start, endLine: end, replacement: replacement)
                 await state.mutation(
                     name,
                     path: path,
                     content: nil,
                     changed: !result.contains("unchanged "),
-                    transaction: workspace.latestEditReceipt(path: path)
+                    transaction: workspace.latestEditReceipt(path: path),
+                    revisionID: workspace.graph.currentRevisionID(path: rangeEditKey)
                 )
+                await emitRevisionEvents(key: rangeEditKey, before: rangeEditBefore, taskID: taskID, kind: "mutation")
 
             case "search":
                 guard let query = args["query"] else { throw CLIError("search requires query") }
@@ -693,8 +817,17 @@ final class ToolRegistry: @unchecked Sendable {
 
             case "validate_file":
                 guard let path = args["path"] else { throw CLIError("validate_file requires path") }
+                let validateKey = workspace.canonicalKey(path)
+                let validateBefore = workspace.graph.currentRevisionID(path: validateKey)
                 result = try workspace.validateFile(path)
-                await state.validationSuccess(name, isRealValidation: true, path: path)
+                await state.validationSuccess(
+                    name,
+                    isRealValidation: true,
+                    path: path,
+                    revisionID: workspace.graph.currentRevisionID(path: validateKey)
+                )
+                await emitExternalIfMoved(key: validateKey, before: validateBefore, taskID: taskID)
+                await events.emit(.evidenceRecorded(taskID: taskID, kind: "validation", path: path))
 
             case "open_file":
                 guard let path = args["path"] else { throw CLIError("open_file requires path") }
@@ -702,7 +835,12 @@ final class ToolRegistry: @unchecked Sendable {
                     path,
                     application: args["application"]
                 )
-                await state.launchSuccess(name, path: path)
+                await state.launchSuccess(
+                    name,
+                    path: path,
+                    revisionID: workspace.graph.currentRevisionID(path: workspace.canonicalKey(path))
+                )
+                await events.emit(.evidenceRecorded(taskID: taskID, kind: "launch", path: path))
 
             case "open_url":
                 guard let url = args["url"] else { throw CLIError("open_url requires url") }
@@ -753,7 +891,19 @@ final class ToolRegistry: @unchecked Sendable {
 
             let elapsed = ContinuousClock.now - start
             await state.toolFinished(seconds: Self.seconds(elapsed))
+            await state.setCurrentRevisions(workspace.graph.currentMap())
             await events.emit(.toolFinished(name: name, ok: true, detail: compact(result), duration: elapsed))
+            // v0.28 runtime stream: mutation and validation evidence as
+            // structured events (additive; existing UI ignores unknown cases
+            // except TerminalUI's one-line arms).
+            let doneTaskID = before.spec.map { "\($0.id)" } ?? "no-task"
+            if SemanticToolCatalog.isMutating(name), let path = args["path"] {
+                let tx = workspace.latestEditReceipt(path: path).map { "\($0)" } ?? compact(result)
+                await events.emit(.proposalCreated(taskID: doneTaskID, path: path))
+                await events.emit(.transactionApplied(taskID: doneTaskID, path: path, transaction: tx))
+            } else if name == "validate_file", let path = args["path"] {
+                await events.emit(.validationFinished(path: path, ok: true))
+            }
             return result
         } catch {
             let message = String(describing: error)
@@ -767,13 +917,22 @@ final class ToolRegistry: @unchecked Sendable {
 
             let elapsed = ContinuousClock.now - start
             await state.toolFinished(seconds: Self.seconds(elapsed))
+            await state.setCurrentRevisions(workspace.graph.currentMap())
             await events.emit(.toolFinished(name: name, ok: false, detail: compact(message), duration: elapsed))
+            if name == "validate_file" {
+                await events.emit(.validationFinished(path: args["path"] ?? name, ok: false))
+            }
 
             if recoverable {
                 return #"{"ok":false,"error":"\#(escapeJSON(message))","retry":true}"#
             }
             return #"{"ok":false,"error":"\#(escapeJSON(message))"}"#
         }
+    }
+
+    /// RuntimeToolExecutor conformance: single-step deterministic drain.
+    func advanceProtocol(allowed: Set<String>) async -> [(name: String, result: String)] {
+        await advanceProtocol(allowed: allowed, maxActions: 8)
     }
 
     func advanceProtocol(
@@ -976,5 +1135,109 @@ final class ToolRegistry: @unchecked Sendable {
         default:
             throw CLIError("unknown tool: \(name)")
         }
+    }
+}
+
+// MARK: - v0.28 RuntimeToolExecutor conformance
+//
+// ToolRegistry IS the runtime-owned ToolExecutor. The coordinator talks to
+// it only through this narrow protocol — never the reverse.
+
+extension ToolRegistry: RuntimeToolExecutor {}
+
+// MARK: - v0.29 revision threading + persistence
+
+extension ToolRegistry {
+    /// Current graph revision for a tool path argument (canonical key).
+    private func graphRevisionID(for path: String?) -> ArtifactRevisionID? {
+        guard let path else { return nil }
+        return workspace.graph.currentRevisionID(path: workspace.canonicalKey(path))
+    }
+
+    /// External-change stream: read-only tools that observe a moved current
+    /// revision caused by disk edits outside SLTA.
+    fileprivate func emitExternalIfMoved(
+        key: String,
+        before: ArtifactRevisionID?,
+        taskID: String
+    ) async {
+        let after = workspace.graph.currentRevisionID(path: key)
+        if before != nil, before != after,
+           workspace.graph.isExternalCurrent(path: key),
+           let rev = after {
+            await events.emit(.artifactExternalChangeDetected(path: key, revision: "\(rev)"))
+            await events.emit(.evidenceBecameStale(taskID: taskID, path: key))
+        }
+    }
+
+    /// Mutation stream: the graph pointer moved because of our own commit.
+    fileprivate func emitRevisionEvents(
+        key: String,
+        before: ArtifactRevisionID?,
+        taskID: String,
+        kind: String
+    ) async {
+        let after = workspace.graph.currentRevisionID(path: key)
+        await events.emit(.evidenceRecorded(taskID: taskID, kind: kind, path: key))
+        if before != after, let rev = after {
+            await events.emit(.artifactRevisionCreated(taskID: taskID, path: key, revision: "\(rev)"))
+        }
+    }
+
+    /// Persist versioned runtime truth (graph + journal + task) for restart.
+    func persistRuntime() async {
+        await state.setCurrentRevisions(workspace.graph.currentMap())
+        let snap = await state.taskSnapshot()
+        let records = await state.journalRecords()
+        let store = RuntimePersistence(projectPath: runtime.projectPath)
+        let graphSnap = workspace.graph.snapshot(revisionProvider: { [workspace] id in
+            workspace.revisionRecord(id)
+        })
+        let persisted = PersistedRuntimeState(
+            schemaVersion: RuntimePersistence.schemaVersion,
+            projectID: store.directory.lastPathComponent,
+            projectPath: runtime.projectPath,
+            savedAt: Date(),
+            spec: snap.spec,
+            requirements: snap.requirements,
+            records: records,
+            itemRevisions: records.map { $0.revisionID },
+            current: snap.artifactRevisions.mapValues { $0.rawValue },
+            lastFailure: snap.validation.lastFailure,
+            artifacts: graphSnap
+        )
+        store.save(persisted)
+        await events.emit(.runtimeStatePersisted(projectID: persisted.projectID))
+    }
+
+    /// Restore persisted truth after restart. Returns false when no usable
+    /// snapshot exists (fresh start). Validation freshness is recomputed
+    /// from the restored graph — never claimed for non-current revisions.
+    @discardableResult
+    func restoreRuntime() async -> Bool {
+        let store = RuntimePersistence(projectPath: runtime.projectPath)
+        guard let persisted = store.load() else { return false }
+        workspace.graph.restore(persisted.artifacts)
+        var items: [TaskEvidence] = []
+        items.reserveCapacity(persisted.records.count)
+        for record in persisted.records {
+            let tx: EditTransactionRef? = record.kind == .mutation
+                ? record.path.flatMap { workspace.latestEditReceipt(path: $0) }
+                : nil
+            items.append(record.legacyEvidence(transaction: tx))
+        }
+        let revs = persisted.itemRevisions.map { $0.map(ArtifactRevisionID.init) }
+        let current = persisted.current.mapValues { ArtifactRevisionID($0) }
+        await state.restore(
+            spec: persisted.spec,
+            requirements: persisted.requirements,
+            items: items,
+            itemRevisions: revs,
+            records: persisted.records,
+            current: current,
+            lastFailure: persisted.lastFailure
+        )
+        await events.emit(.runtimeStateRestored(projectID: persisted.projectID))
+        return true
     }
 }

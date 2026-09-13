@@ -1,4 +1,5 @@
 import Foundation
+import SLTACore
 
 private final class WorkspaceTaskCache: @unchecked Sendable {
     private let lock = NSLock()
@@ -9,15 +10,22 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
     private var listCache: [String: (UInt64, String)] = [:]
     private var searchCache: [String: (UInt64, String)] = [:]
 
-    func reset() {
+    @inline(__always)
+    private func withLock<T>(_ body: () throws -> T) rethrows -> T {
         lock.lock()
-        revision = 0
-        readPaths.removeAll(keepingCapacity: true)
-        createdPaths.removeAll(keepingCapacity: true)
-        readCache.removeAll(keepingCapacity: true)
-        listCache.removeAll(keepingCapacity: true)
-        searchCache.removeAll(keepingCapacity: true)
-        lock.unlock()
+        defer { lock.unlock() }
+        return try body()
+    }
+
+    func reset() {
+        withLock {
+            revision = 0
+            readPaths.removeAll(keepingCapacity: true)
+            createdPaths.removeAll(keepingCapacity: true)
+            readCache.removeAll(keepingCapacity: true)
+            listCache.removeAll(keepingCapacity: true)
+            searchCache.removeAll(keepingCapacity: true)
+        }
     }
 
     func cachedRead(_ path: String) -> String? {
@@ -29,10 +37,10 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
     }
 
     func storeRead(_ path: String, content: String) {
-        lock.lock()
-        readPaths.insert(path)
-        readCache[path] = (revision, content)
-        lock.unlock()
+        withLock {
+            readPaths.insert(path)
+            readCache[path] = (revision, content)
+        }
     }
 
     func cachedList(_ key: String) -> String? {
@@ -43,9 +51,9 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
     }
 
     func storeList(_ key: String, result: String) {
-        lock.lock()
-        listCache[key] = (revision, result)
-        lock.unlock()
+        withLock {
+            listCache[key] = (revision, result)
+        }
     }
 
     func cachedSearch(_ key: String) -> String? {
@@ -56,9 +64,9 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
     }
 
     func storeSearch(_ key: String, result: String) {
-        lock.lock()
-        searchCache[key] = (revision, result)
-        lock.unlock()
+        withLock {
+            searchCache[key] = (revision, result)
+        }
     }
 
     func mayOverwrite(_ path: String) -> Bool {
@@ -68,32 +76,32 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
     }
 
     func markCreated(_ path: String) {
-        lock.lock()
-        createdPaths.insert(path)
-        lock.unlock()
+        withLock {
+            createdPaths.insert(path)
+        }
     }
 
     func mutation(targetPath: String?) {
-        lock.lock()
-        revision &+= 1
-        readCache.removeAll(keepingCapacity: true)
-        listCache.removeAll(keepingCapacity: true)
-        searchCache.removeAll(keepingCapacity: true)
+        withLock {
+            revision &+= 1
+            readCache.removeAll(keepingCapacity: true)
+            listCache.removeAll(keepingCapacity: true)
+            searchCache.removeAll(keepingCapacity: true)
 
-        if let targetPath {
-            readPaths.insert(targetPath)
+            if let targetPath {
+                readPaths.insert(targetPath)
+            }
         }
-        lock.unlock()
     }
 
     func unknownShellMutation() {
-        lock.lock()
-        revision &+= 1
-        readPaths.removeAll(keepingCapacity: true)
-        readCache.removeAll(keepingCapacity: true)
-        listCache.removeAll(keepingCapacity: true)
-        searchCache.removeAll(keepingCapacity: true)
-        lock.unlock()
+        withLock {
+            revision &+= 1
+            readPaths.removeAll(keepingCapacity: true)
+            readCache.removeAll(keepingCapacity: true)
+            listCache.removeAll(keepingCapacity: true)
+            searchCache.removeAll(keepingCapacity: true)
+        }
     }
 }
 
@@ -175,6 +183,9 @@ enum SmartBlockMatcher {
 final class Workspace: @unchecked Sendable {
     let root: URL
     let shellTimeoutSeconds: Int
+    let limits: SLTALimits
+    /// v0.29 single ArtifactGraph per project (revision-aware source of truth).
+    let graph: ArtifactGraph
 
     private let fm = FileManager.default
     private let policy: PolicyEngine
@@ -194,17 +205,145 @@ final class Workspace: @unchecked Sendable {
         shellTimeoutSeconds: Int,
         policy: PolicyEngine,
         runtime: RuntimeEnvironment,
-        editHistoryRoot: URL? = nil
+        editHistoryRoot: URL? = nil,
+        limits: SLTALimits = .fromEnvironment(),
+        artifactGraph: ArtifactGraph? = nil
     ) {
         let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
         self.root = resolvedRoot
         self.shellTimeoutSeconds = shellTimeoutSeconds
         self.policy = policy
         self.runtime = runtime
+        self.limits = limits
+        self.graph = artifactGraph ?? ArtifactGraph()
         self.editEngine = EditEngine(
             projectRoot: resolvedRoot,
             historyRoot: editHistoryRoot
         )
+    }
+
+    // MARK: v0.29 ArtifactGraph integration
+
+    /// Canonical graph key: project-relative path. Falls back to the raw
+    /// argument when it cannot be resolved inside the sandbox.
+    func canonicalKey(_ path: String) -> String {
+        if let url = try? resolve(path) {
+            let key = relative(url)
+            if !key.isEmpty { return key }
+        }
+        return path
+    }
+
+    /// Full revision record: EditEngine history first, graph external markers second.
+    func revisionRecord(_ id: ArtifactRevisionID) -> ArtifactRevision? {
+        editEngine.revision(id) ?? graph.externalRecord(id)
+    }
+
+    /// First sight adopts the observed revision as current (reads never bump).
+    /// A divergent observe (disk moved under us) is reconciled as external.
+    private func noteObserved(key: String, revision: ArtifactRevision, content: String) {
+        if graph.currentRevisionID(path: key) == nil {
+            graph.adoptIfUnknown(
+                revision,
+                contentHash: ArtifactHash.sha256(content),
+                taskID: revision.originTask
+            )
+        } else if graph.currentRevisionID(path: key) != revision.id {
+            _ = graph.markExternal(
+                path: key,
+                contentHash: ArtifactHash.sha256(content),
+                exists: true,
+                byteCount: content.utf8.count,
+                lineCount: content.components(separatedBy: "\n").count
+            )
+        }
+    }
+
+    /// One logical transaction creates one new current revision per artifact.
+    /// Hash comes from in-memory resulting content — no disk re-read (§7).
+    private func noteMutated(key: String, newContent: String) {
+        guard let revision = editEngine.latestRevision(path: key) else { return }
+        graph.registerRevision(
+            revision,
+            contentHash: ArtifactHash.sha256(newContent),
+            taskID: revision.originTask,
+            kind: ArtifactType.infer(path: key)
+        )
+    }
+
+    /// Hash/metadata comparison on access (§8). No filesystem watcher.
+    /// Returns true when an external change was recorded (old evidence stale).
+    @discardableResult
+    private func detectExternalChange(key: String, url: URL, knownContent: String?) -> Bool {
+        guard graph.node(path: key) != nil else { return false }
+        if let content = knownContent {
+            let hash = ArtifactHash.sha256(content)
+            guard hash != graph.currentHash(path: key) else { return false }
+            _ = graph.markExternal(
+                path: key,
+                contentHash: hash,
+                exists: true,
+                byteCount: content.utf8.count,
+                lineCount: content.components(separatedBy: "\n").count
+            )
+            return true
+        }
+        // validate path without in-memory content: bounded disk hash.
+        guard let attrs = try? fm.attributesOfItem(atPath: url.path),
+              let size = attrs[.size] as? NSNumber,
+              size.intValue <= limits.fileMaxBytes,
+              let hash = ArtifactHash.sha256File(at: url) else {
+            return false
+        }
+        guard hash != graph.currentHash(path: key) else { return false }
+        let text = (try? String(contentsOf: url, encoding: .utf8)) ?? ""
+        _ = graph.markExternal(
+            path: key,
+            contentHash: hash,
+            exists: true,
+            byteCount: size.intValue,
+            lineCount: text.components(separatedBy: "\n").count
+        )
+        return true
+    }
+
+    /// Deletion is an external change too: record it before throwing not-found.
+    @discardableResult
+    private func detectExternalDeletion(key: String) -> Bool {
+        guard let node = graph.node(path: key), node.exists else { return false }
+        _ = graph.markExternal(
+            path: key,
+            contentHash: "missing",
+            exists: false,
+            byteCount: 0,
+            lineCount: 0
+        )
+        return true
+    }
+
+    @inline(__always)
+    private func withInvariantLock<T>(_ body: () throws -> T) rethrows -> T {
+        invariantLock.lock()
+        defer { invariantLock.unlock() }
+        return try body()
+    }
+
+    /// Общий helper: resolve + проверка файл/директория + чтение UTF-8.
+    /// Убирает дублирование readFile / readFileRange / editFile / editFileRange.
+    private func loadTextFile(path: String, url: URL) throws -> String {
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            throw SLTAError.fileNotFound(path)
+        }
+        guard !isDirectory.boolValue else {
+            throw SLTAError.isDirectory(path)
+        }
+        return try String(contentsOf: url, encoding: .utf8)
+    }
+
+    private func observeAndCache(path: String, url: URL, text: String) throws {
+        _ = try editEngine.observe(path: path, content: text)
+        taskCache.storeRead(url.path, content: text)
     }
 
     func beginTask(
@@ -221,9 +360,9 @@ final class Workspace: @unchecked Sendable {
             return nil
         }.max()
 
-        invariantLock.lock()
-        minimumLineCount = minimum
-        invariantLock.unlock()
+        withInvariantLock {
+            minimumLineCount = minimum
+        }
     }
 
     func listDir(_ path: String) throws -> String {
@@ -236,7 +375,7 @@ final class Workspace: @unchecked Sendable {
         }
 
         let names = try fm.contentsOfDirectory(atPath: url.path).sorted()
-        let result = names.prefix(300).joined(separator: "\n")
+        let result = names.prefix(limits.listDirMaxEntries).joined(separator: "\n")
         taskCache.storeList(key, result: result)
         return result
     }
@@ -252,22 +391,26 @@ final class Workspace: @unchecked Sendable {
 
         var isDirectory: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-            throw CLIError("file not found: \(path)")
+            _ = detectExternalDeletion(key: canonicalKey(path))
+            throw SLTAError.fileNotFound(path)
         }
         guard !isDirectory.boolValue else {
-            throw CLIError("path is a directory: \(path)")
+            throw SLTAError.isDirectory(path)
         }
 
         let attributes = try fm.attributesOfItem(atPath: url.path)
-        if let size = attributes[.size] as? NSNumber, size.intValue > 1_500_000 {
-            throw CLIError("file too large (>1.5MB): \(path)")
+        if let size = attributes[.size] as? NSNumber, size.intValue > limits.fileMaxBytes {
+            throw SLTAError.fileTooLarge(path: path, limit: limits.fileMaxBytes)
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
-        _ = try editEngine.observe(
-            path: relative(url),
+        let gkey = canonicalKey(path)
+        _ = detectExternalChange(key: gkey, url: url, knownContent: text)
+        let observed = try editEngine.observe(
+            path: gkey,
             content: text
         )
+        noteObserved(key: gkey, revision: observed, content: text)
         taskCache.storeRead(key, content: text)
         return text
     }
@@ -294,7 +437,9 @@ final class Workspace: @unchecked Sendable {
 
             let oldText = try String(contentsOf: url, encoding: .utf8)
             previousContent = oldText
-            _ = try editEngine.observe(path: path, content: oldText)
+            let gkey = canonicalKey(path)
+            _ = detectExternalChange(key: gkey, url: url, knownContent: oldText)
+            _ = try editEngine.observe(path: gkey, content: oldText)
 
             if !taskCache.mayOverwrite(key) {
                 taskCache.storeRead(key, content: oldText)
@@ -304,14 +449,14 @@ final class Workspace: @unchecked Sendable {
                 return "unchanged \(path) · content already matches"
             }
         } else {
-            _ = try editEngine.observe(path: path, content: nil)
+            _ = try editEngine.observe(path: canonicalKey(path), content: nil)
         }
 
         try validateArtifactInvariants(path: path, content: content)
 
         let operation: EditOperationKind = exists ? .fullReplace : .create
         let prepared = try editEngine.prepare(
-            path: path,
+            path: canonicalKey(path),
             before: previousContent,
             after: content,
             operation: operation
@@ -329,6 +474,7 @@ final class Workspace: @unchecked Sendable {
             let receipt = try editEngine.commit(prepared)
             if !exists { taskCache.markCreated(key) }
             taskCache.mutation(targetPath: key)
+            noteMutated(key: canonicalKey(path), newContent: content)
 
             return "wrote \(path) · \(data.count) B · \(receipt)"
         } catch {
@@ -355,7 +501,10 @@ final class Workspace: @unchecked Sendable {
         let existingPerms = attrs?[.posixPermissions] as? NSNumber
 
         let text = try String(contentsOf: url, encoding: .utf8)
-        _ = try editEngine.observe(path: path, content: text)
+        let gkey = canonicalKey(path)
+        _ = detectExternalChange(key: gkey, url: url, knownContent: text)
+        let observed = try editEngine.observe(path: gkey, content: text)
+        noteObserved(key: gkey, revision: observed, content: text)
         taskCache.storeRead(key, content: text)
 
         // ИСПОЛЬЗУЕМ КУРСОРОВСКИЙ УМНЫЙ МАТЧЕР
@@ -375,7 +524,7 @@ final class Workspace: @unchecked Sendable {
         try validateArtifactInvariants(path: path, content: updated)
 
         let prepared = try editEngine.prepare(
-            path: path,
+            path: gkey,
             before: text,
             after: updated,
             operation: .exactReplace
@@ -390,6 +539,7 @@ final class Workspace: @unchecked Sendable {
 
             let receipt = try editEngine.commit(prepared)
             taskCache.mutation(targetPath: key)
+            noteMutated(key: gkey, newContent: updated)
 
             let oldLines = text.split(separator: "\n", omittingEmptySubsequences: false).count
             let newLines = updated.split(separator: "\n", omittingEmptySubsequences: false).count
@@ -420,7 +570,10 @@ final class Workspace: @unchecked Sendable {
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
-        _ = try editEngine.observe(path: path, content: text)
+        let gkey = canonicalKey(path)
+        _ = detectExternalChange(key: gkey, url: url, knownContent: text)
+        let observed = try editEngine.observe(path: gkey, content: text)
+        noteObserved(key: gkey, revision: observed, content: text)
         taskCache.storeRead(url.path, content: text)
 
         let lines = text.components(separatedBy: "\n")
@@ -455,7 +608,10 @@ final class Workspace: @unchecked Sendable {
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
-        _ = try editEngine.observe(path: path, content: text)
+        let gkey = canonicalKey(path)
+        _ = detectExternalChange(key: gkey, url: url, knownContent: text)
+        let observed = try editEngine.observe(path: gkey, content: text)
+        noteObserved(key: gkey, revision: observed, content: text)
         taskCache.storeRead(key, content: text)
 
         var lines = text.components(separatedBy: "\n")
@@ -474,7 +630,7 @@ final class Workspace: @unchecked Sendable {
         try validateArtifactInvariants(path: path, content: updated)
 
         let prepared = try editEngine.prepare(
-            path: path,
+            path: gkey,
             before: text,
             after: updated,
             operation: .rangeReplace
@@ -484,6 +640,7 @@ final class Workspace: @unchecked Sendable {
             try Data(updated.utf8).write(to: url, options: .atomic)
             let receipt = try editEngine.commit(prepared)
             taskCache.mutation(targetPath: key)
+            noteMutated(key: gkey, newContent: updated)
             return "updated range \(path) · lines \(startLine)-\(endLine) · \(receipt)"
         } catch {
             editEngine.reject(prepared)
@@ -507,7 +664,7 @@ final class Workspace: @unchecked Sendable {
             let arguments = [
                 "-n", "--no-heading", "--color", "never",
                 "--smart-case",
-                "--max-count", "300",
+                "--max-count", String(limits.searchMaxHits),
                 "--glob", "!.git/**",
                 "--glob", "!node_modules/**",
                 "--glob", "!DerivedData/**",
@@ -517,7 +674,7 @@ final class Workspace: @unchecked Sendable {
                 relativeBase.isEmpty ? "." : relativeBase
             ]
 
-            let runResult = try run(rg, arguments, 20, allow: [1])
+            let runResult = try run(rg, arguments, limits.searchTimeoutSeconds, allow: [1])
             result = runResult.status == 1 ? "no matches" : runResult.output
         } else {
             var hits: [String] = []
@@ -539,7 +696,7 @@ final class Workspace: @unchecked Sendable {
 
                 let values = try? url.resourceValues(forKeys: keys)
                 guard values?.isRegularFile == true,
-                      (values?.fileSize ?? 0) < 750_000,
+                      (values?.fileSize ?? 0) < limits.searchFallbackMaxBytes,
                       let text = try? String(contentsOf: url, encoding: .utf8) else {
                     continue
                 }
@@ -547,11 +704,11 @@ final class Workspace: @unchecked Sendable {
                 for (lineNumber, line) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated()
                     where line.localizedCaseInsensitiveContains(query) {
                     hits.append("\(relative(url)):\(lineNumber + 1):\(line)")
-                    if hits.count >= 300 { break outer }
+                    if hits.count >= limits.searchMaxHits { break outer }
                 }
             }
 
-            result = hits.isEmpty ? "no matches" : String(hits.joined(separator: "\n").prefix(32_000))
+            result = hits.isEmpty ? "no matches" : String(hits.joined(separator: "\n").prefix(limits.searchOutputMaxChars))
         }
 
         taskCache.storeSearch(cacheKey, result: result)
@@ -562,7 +719,7 @@ final class Workspace: @unchecked Sendable {
         try policy.authorize(tool: "shell", risk: .shell)
         try policy.validateShell(command)
 
-        let result = try run("/bin/zsh", ["-lc", command], shellTimeoutSeconds)
+        let result = try run(limits.shellPath, ["-lc", command], shellTimeoutSeconds)
         taskCache.unknownShellMutation()
         return "exit=\(result.status)\n\(result.output)"
     }
@@ -573,8 +730,11 @@ final class Workspace: @unchecked Sendable {
         var isDirectory: ObjCBool = false
 
         guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
+            _ = detectExternalDeletion(key: canonicalKey(path))
             throw CLIError("file not found: \(path)")
         }
+        // External change invalidates prior validation before we re-validate.
+        _ = detectExternalChange(key: canonicalKey(path), url: url, knownContent: nil)
         guard !isDirectory.boolValue else {
             throw CLIError("validate_file expects a file: \(path)")
         }
@@ -585,7 +745,7 @@ final class Workspace: @unchecked Sendable {
             return try validateHTML(url, path: path)
         case "swift":
             guard let swiftc = runtime.executables["swiftc"] else { throw CLIError("swiftc is not available") }
-            _ = try run(swiftc, ["-parse", url.path], 60)
+            _ = try run(swiftc, ["-parse", url.path], limits.swiftcTimeoutSeconds)
             return "swift syntax valid: \(path)"
         case "json":
             let data = try Data(contentsOf: url)
@@ -596,26 +756,26 @@ final class Workspace: @unchecked Sendable {
                 throw CLIError("python is not available")
             }
             let script = "import ast,pathlib,sys; ast.parse(pathlib.Path(sys.argv[1]).read_text())"
-            _ = try run(python, ["-c", script, url.path], 30)
+            _ = try run(python, ["-c", script, url.path], limits.validateTimeoutSeconds)
             return "python syntax valid: \(path)"
         case "js", "mjs", "cjs":
             guard let node = runtime.executables["node"] else { throw CLIError("node is not available") }
-            _ = try run(node, ["--check", url.path], 30)
+            _ = try run(node, ["--check", url.path], limits.validateTimeoutSeconds)
             return "javascript syntax valid: \(path)"
         case "rb":
             guard let ruby = runtime.executables["ruby"] else { throw CLIError("ruby is not available") }
-            _ = try run(ruby, ["-c", url.path], 30)
+            _ = try run(ruby, ["-c", url.path], limits.validateTimeoutSeconds)
             return "ruby syntax valid: \(path)"
         case "php":
             guard let php = runtime.executables["php"] else { throw CLIError("php is not available") }
-            _ = try run(php, ["-l", url.path], 30)
+            _ = try run(php, ["-l", url.path], limits.validateTimeoutSeconds)
             return "PHP syntax valid: \(path)"
         case "sh", "bash", "zsh":
             let shellName = ext == "sh" ? "zsh" : ext
             guard let shell = runtime.executables[shellName] else {
                 throw CLIError("\(shellName) is not available")
             }
-            _ = try run(shell, ["-n", url.path], 30)
+            _ = try run(shell, ["-n", url.path], limits.validateTimeoutSeconds)
             return "shell syntax valid: \(path)"
         default:
             throw CLIError("no deterministic validator for .\(ext)")
@@ -789,6 +949,7 @@ final class Workspace: @unchecked Sendable {
         try Data(target.utf8).write(to: url, options: .atomic)
         let receipt = try editEngine.commit(prepared)
         taskCache.mutation(targetPath: url.path)
+        noteMutated(key: canonicalKey(path), newContent: target)
         return "rolled back \(path) · \(receipt)"
     }
     func restoreCheckpoint(_ prefix: String) throws -> String {
@@ -804,6 +965,7 @@ final class Workspace: @unchecked Sendable {
         try Data(target.utf8).write(to: url, options: .atomic)
         let receipt = try editEngine.commit(prepared)
         taskCache.mutation(targetPath: url.path)
+        noteMutated(key: canonicalKey(checkpoint.path), newContent: target)
         return "restored checkpoint \(checkpoint.id) · \(receipt)"
     }
     func gitStatus() throws -> String {

@@ -25,6 +25,9 @@ struct SemanticToolDescriptor: Sendable {
 enum ToolInvocationSource: String, Sendable {
     case modelText
     case protocolEngine
+    /// Normalized invocation produced by a ModelProvider (any backend).
+    /// Provider-specific formats must be converted before crossing the boundary.
+    case provider
 }
 
 struct NormalizedToolInvocation: Sendable {

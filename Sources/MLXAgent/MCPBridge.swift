@@ -1,4 +1,5 @@
 import Foundation
+import SLTACore
 import MLXLMCommon
 
 public struct MCPToolDescriptor: Sendable {

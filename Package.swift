@@ -5,7 +5,8 @@ let package = Package(
     name: "mlxagent",
     platforms: [.macOS(.v15)],
     products: [
-        .executable(name: "mlxagent", targets: ["MLXAgent"])
+        .executable(name: "mlxagent", targets: ["MLXAgent"]),
+        .library(name: "SLTACore", targets: ["SLTACore"])
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.4")),
@@ -15,9 +16,13 @@ let package = Package(
         .package(url: "https://github.com/gonzalezreal/textual", from: "0.1.0")
     ],
     targets: [
+        .target(
+            name: "SLTACore"
+        ),
         .executableTarget(
             name: "MLXAgent",
             dependencies: [
+                "SLTACore",
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
@@ -26,6 +31,10 @@ let package = Package(
                 // ✅ Заменили продукт MarkdownUI на Textual
                 .product(name: "Textual", package: "textual")
             ]
+        ),
+        .testTarget(
+            name: "MLXAgentTests",
+            dependencies: ["SLTACore"]
         )
     ]
 )

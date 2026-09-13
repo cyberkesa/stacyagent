@@ -1,11 +1,8 @@
 import Foundation
+import SLTACore
 
-struct CLIError: Error, LocalizedError, CustomStringConvertible, Sendable {
-    let message: String
-    init(_ message: String) { self.message = message }
-    var description: String { message }
-    var errorDescription: String? { message }
-}
+// CLIError теперь из SLTACore (enum SLTAError + typealias CLIError).
+// Локальный struct удалён во избежание конфликта имён.
 
 enum ApprovalMode: String, Sendable {
     case readOnly = "read-only"
@@ -208,7 +205,7 @@ struct ValidationState: Sendable {
     var lastValidation: String?
 }
 
-enum TurnMode: String, Sendable {
+enum TurnMode: String, Sendable, Codable {
     case chat = "CHAT"
     case inspect = "INSPECT"
     case agent = "AGENT"

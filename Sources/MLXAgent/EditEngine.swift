@@ -1,4 +1,5 @@
 import Foundation
+import SLTACore
 
 struct ArtifactRevisionID: Hashable, Codable, Sendable, CustomStringConvertible {
     let rawValue: UUID
@@ -54,10 +55,73 @@ struct ArtifactRevision: Codable, Hashable, Sendable, CustomStringConvertible {
     let originTask: String?
     let createdAt: Date
     var state: ArtifactRevisionState
+    /// SHA-256 hex of the revision content ("empty" hash when !exists).
+    /// Added in v0.29; decoded as nil for pre-v0.29 persisted revisions.
+    let contentHash: String?
+    /// v0.29 revision origin (task mutation / external change / observation).
+    /// Decoded as `.task` for pre-v0.29 persisted revisions.
+    let origin: RevisionOrigin
+
+    enum CodingKeys: String, CodingKey {
+        case id, path, number, exists, byteCount, lineCount
+        case snapshotFile, originTask, createdAt, state
+        case contentHash, origin
+    }
+
+    init(
+        id: ArtifactRevisionID,
+        path: String,
+        number: Int,
+        exists: Bool,
+        byteCount: Int,
+        lineCount: Int,
+        snapshotFile: String,
+        originTask: String?,
+        createdAt: Date,
+        state: ArtifactRevisionState,
+        contentHash: String? = nil,
+        origin: RevisionOrigin = .task
+    ) {
+        self.id = id
+        self.path = path
+        self.number = number
+        self.exists = exists
+        self.byteCount = byteCount
+        self.lineCount = lineCount
+        self.snapshotFile = snapshotFile
+        self.originTask = originTask
+        self.createdAt = createdAt
+        self.state = state
+        self.contentHash = contentHash
+        self.origin = origin
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(ArtifactRevisionID.self, forKey: .id)
+        path = try container.decode(String.self, forKey: .path)
+        number = try container.decode(Int.self, forKey: .number)
+        exists = try container.decode(Bool.self, forKey: .exists)
+        byteCount = try container.decode(Int.self, forKey: .byteCount)
+        lineCount = try container.decode(Int.self, forKey: .lineCount)
+        snapshotFile = try container.decode(String.self, forKey: .snapshotFile)
+        originTask = try container.decodeIfPresent(String.self, forKey: .originTask)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        state = try container.decode(ArtifactRevisionState.self, forKey: .state)
+        contentHash = try container.decodeIfPresent(String.self, forKey: .contentHash)
+        origin = try container.decodeIfPresent(RevisionOrigin.self, forKey: .origin) ?? .task
+    }
 
     var description: String {
         "r\(number) \(state.rawValue) \(path) · \(byteCount) B · \(lineCount) lines"
     }
+}
+
+/// v0.29: where a revision came from. Persisted; unknown old data → .task.
+enum RevisionOrigin: String, Codable, Sendable {
+    case task
+    case external
+    case observed
 }
 
 struct EditLineRange: Codable, Hashable, Sendable, CustomStringConvertible {
@@ -366,7 +430,9 @@ final class RevisionStore: @unchecked Sendable {
             snapshotFile: snapshotFile,
             originTask: originTask,
             createdAt: Date(),
-            state: revisionState
+            state: revisionState,
+            contentHash: ArtifactHash.sha256(content ?? ""),
+            origin: .task
         )
         state.revisions.append(revision)
         return revision
@@ -378,11 +444,13 @@ final class RevisionStore: @unchecked Sendable {
     }
 
     private func persistLocked() {
-        guard let data = try? JSONEncoder.pretty.encode(state) else {
-            return
+        do {
+            let data = try JSONEncoder.pretty.encode(state)
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try data.write(to: metadataURL, options: .atomic)
+        } catch {
+            AppLog.persistenceError("persistLocked \(type(of: self)): \(error.localizedDescription)")
         }
-        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
-        try? data.write(to: metadataURL, options: .atomic)
     }
 
     private static func lineCount(_ content: String?) -> Int {
@@ -477,11 +545,13 @@ final class CheckpointStore: @unchecked Sendable {
     }
 
     private func persistLocked() {
-        guard let data = try? JSONEncoder.pretty.encode(state) else {
-            return
+        do {
+            let data = try JSONEncoder.pretty.encode(state)
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try data.write(to: metadataURL, options: .atomic)
+        } catch {
+            AppLog.persistenceError("persistLocked \(type(of: self)): \(error.localizedDescription)")
         }
-        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
-        try? data.write(to: metadataURL, options: .atomic)
     }
 }
 
@@ -815,6 +885,16 @@ final class EditEngine: @unchecked Sendable {
         revisions.history(path: path, limit: limit)
     }
 
+    /// v0.29: latest live revision for ArtifactGraph registration.
+    func latestRevision(path: String) -> ArtifactRevision? {
+        revisions.latestCurrent(path: path)
+    }
+
+    /// v0.29: revision record by ID for persistence snapshots.
+    func revision(_ id: ArtifactRevisionID) -> ArtifactRevision? {
+        revisions.revision(id)
+    }
+
     func checkpointHistory(path: String? = nil, limit: Int = 30) -> [EditCheckpoint] {
         checkpoints.list(path: path, limit: limit)
     }
@@ -878,11 +958,13 @@ final class EditEngine: @unchecked Sendable {
     }
 
     private func persistTransactionsLocked() {
-        guard let data = try? JSONEncoder.pretty.encode(transactionState) else {
-            return
+        do {
+            let data = try JSONEncoder.pretty.encode(transactionState)
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            try data.write(to: transactionsURL, options: .atomic)
+        } catch {
+            AppLog.persistenceError("persistTransactionsLocked: \(error.localizedDescription)")
         }
-        try? fm.createDirectory(at: root, withIntermediateDirectories: true)
-        try? data.write(to: transactionsURL, options: .atomic)
     }
 
     private static func buildHunks(

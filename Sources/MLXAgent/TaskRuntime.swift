@@ -22,6 +22,14 @@ struct TaskRuntimeSnapshot: Sendable {
     let validatedPaths: [String]
     let resolvedTargetPath: String?
 
+    // MARK: v0.29 revision-aware truth (additive)
+    /// Current graph revision per path at snapshot time.
+    let artifactRevisions: [String: ArtifactRevisionID]
+    /// Revision bound to each evidence item (parallel to `evidence`).
+    let evidenceRevisions: [ArtifactRevisionID?]
+    /// Indices into `evidence` that are stale (bound revision != current).
+    let staleEvidenceIndices: [Int]
+
     var isComplete: Bool {
         spec != nil &&
         !validation.lastToolFailed &&
@@ -71,6 +79,9 @@ actor RuntimeState {
     private var failedMessage: String?
     private var failureCount = 0
 
+    // MARK: v0.29 — pushed from ArtifactGraph (ToolRegistry) after each tool op.
+    private var currentRevisions: [String: ArtifactRevisionID] = [:]
+
     private var signatureCounts: [String: Int] = [:]
 
     func beginTask(_ spec: TaskSpec) {
@@ -95,6 +106,7 @@ actor RuntimeState {
         failedMessage = nil
         failureCount = 0
         signatureCounts.removeAll(keepingCapacity: true)
+        currentRevisions.removeAll(keepingCapacity: true)
     }
 
     func resetTask() {
@@ -119,6 +131,7 @@ actor RuntimeState {
         failedMessage = nil
         failureCount = 0
         signatureCounts.removeAll(keepingCapacity: true)
+        currentRevisions.removeAll(keepingCapacity: true)
     }
 
     func toolStarted() {
@@ -143,7 +156,7 @@ actor RuntimeState {
         return count < 4
     }
 
-    func observation(_ name: String, path: String? = nil) {
+    func observation(_ name: String, path: String? = nil, revisionID: ArtifactRevisionID? = nil) {
         resolveFailureIfSameTool(name)
 
         let effectivePath =
@@ -154,12 +167,20 @@ actor RuntimeState {
                     : nil
             )
 
-        evidenceStore.append(
-            .observed(
-                tool: name,
-                path: effectivePath
-            )
+        let observed = TaskEvidence.observed(
+            tool: name,
+            path: effectivePath
         )
+        evidenceStore.append(observed, revision: revisionID, record: EvidenceRecord(
+            id: UUID(),
+            taskID: currentTaskID(),
+            kind: .observed,
+            tool: name,
+            path: effectivePath,
+            revisionID: revisionID?.rawValue,
+            createdAt: Date(),
+            detail: "observed" + (effectivePath.map { " " + $0 } ?? "")
+        ))
 
         if let effectivePath {
             appendUnique(
@@ -178,7 +199,8 @@ actor RuntimeState {
         path: String?,
         content: String?,
         changed: Bool,
-        transaction: EditTransactionRef? = nil
+        transaction: EditTransactionRef? = nil,
+        revisionID: ArtifactRevisionID? = nil
     ) {
         resolveFailureIfSameTool(name)
 
@@ -186,14 +208,23 @@ actor RuntimeState {
         mutationContent = content
         validation.lastMutation = name
 
-        evidenceStore.append(
-            .mutated(
-                tool: name,
-                path: path,
-                changed: changed,
-                transaction: transaction
-            )
+        let mutated = TaskEvidence.mutated(
+            tool: name,
+            path: path,
+            changed: changed,
+            transaction: transaction
         )
+        evidenceStore.append(mutated, revision: revisionID, record: EvidenceRecord(
+            id: UUID(),
+            taskID: currentTaskID(),
+            kind: .mutation,
+            tool: name,
+            path: path,
+            revisionID: revisionID?.rawValue,
+            createdAt: Date(),
+            detail: (changed ? "mutated" : "confirmed") + (path.map { " " + $0 } ?? ""),
+            changed: changed
+        ))
 
         if let path {
             if changed {
@@ -211,7 +242,8 @@ actor RuntimeState {
         _ name: String,
         result: String,
         changed: Bool,
-        transaction: EditTransactionRef? = nil
+        transaction: EditTransactionRef? = nil,
+        revisionID: ArtifactRevisionID? = nil
     ) {
         let path = Self.pathFromMutationResult(result)
         mutation(
@@ -219,11 +251,12 @@ actor RuntimeState {
             path: path,
             content: nil,
             changed: changed,
-            transaction: transaction
+            transaction: transaction,
+            revisionID: revisionID
         )
     }
 
-    func readBack(path: String, content: String) {
+    func readBack(path: String, content: String, revisionID: ArtifactRevisionID? = nil) {
         resolveFailureIfSameTool("read_file")
 
         appendUnique(path, to: &readPaths)
@@ -232,6 +265,15 @@ actor RuntimeState {
             .observed(
                 tool: "read_file",
                 path: path
+            ),
+            revision: revisionID,
+            record: EvidenceRecord(
+                taskID: currentTaskID(),
+                kind: .observed,
+                tool: "read_file",
+                path: path,
+                revisionID: revisionID?.rawValue,
+                detail: "observed " + path
             )
         )
 
@@ -255,6 +297,16 @@ actor RuntimeState {
                 .readBack(
                     path: path,
                     matched: matched
+                ),
+                revision: revisionID,
+                record: EvidenceRecord(
+                    taskID: currentTaskID(),
+                    kind: .readBack,
+                    tool: "read_file",
+                    path: path,
+                    revisionID: revisionID?.rawValue,
+                    detail: "read back " + path + " matched=\(matched)",
+                    matched: matched
                 )
             )
 
@@ -270,7 +322,8 @@ actor RuntimeState {
     func validationSuccess(
         _ name: String,
         isRealValidation: Bool,
-        path: String? = nil
+        path: String? = nil,
+        revisionID: ArtifactRevisionID? = nil
     ) {
         resolveFailureIfSameTool(name)
 
@@ -288,6 +341,17 @@ actor RuntimeState {
                 .validated(
                     tool: name,
                     path: effectivePath
+                ),
+                revision: revisionID,
+                record: EvidenceRecord(
+                    id: UUID(),
+                    taskID: currentTaskID(),
+                    kind: .validation,
+                    tool: name,
+                    path: effectivePath,
+                    revisionID: revisionID?.rawValue,
+                    createdAt: Date(),
+                    detail: "validated" + (effectivePath.map { " " + $0 } ?? "")
                 )
             )
 
@@ -306,7 +370,8 @@ actor RuntimeState {
 
     func launchSuccess(
         _ name: String,
-        path: String? = nil
+        path: String? = nil,
+        revisionID: ArtifactRevisionID? = nil
     ) {
         resolveFailureIfSameTool(name)
 
@@ -318,6 +383,17 @@ actor RuntimeState {
             .launched(
                 tool: name,
                 path: path
+            ),
+            revision: revisionID,
+            record: EvidenceRecord(
+                id: UUID(),
+                taskID: currentTaskID(),
+                kind: .launch,
+                tool: name,
+                path: path,
+                revisionID: revisionID?.rawValue,
+                createdAt: Date(),
+                detail: "launched" + (path.map { " " + $0 } ?? "")
             )
         )
 
@@ -330,7 +406,8 @@ actor RuntimeState {
 
     func nativeLaunchSuccess(
         _ name: String,
-        result: String
+        result: String,
+        revisionID: ArtifactRevisionID? = nil
     ) {
         let freshPrefix = "opened fresh "
         let normalPrefix = "opened "
@@ -344,11 +421,11 @@ actor RuntimeState {
             path = nil
         }
 
-        launchSuccess(name, path: path)
+        launchSuccess(name, path: path, revisionID: revisionID)
     }
 
-    func ordinarySuccess(_ name: String) {
-        observation(name)
+    func ordinarySuccess(_ name: String, revisionID: ArtifactRevisionID? = nil) {
+        observation(name, revisionID: revisionID)
     }
 
     func externalSuccess(
@@ -361,6 +438,16 @@ actor RuntimeState {
         evidenceStore.append(
             .externalEffect(
                 tool: name,
+                server: server,
+                operation: operation,
+                urls: urls
+            ),
+            revision: nil,
+            record: EvidenceRecord(
+                taskID: currentTaskID(),
+                kind: .external,
+                tool: name,
+                detail: "external effect " + ([server, operation].compactMap { $0 }.joined(separator: ".")),
                 server: server,
                 operation: operation,
                 urls: urls
@@ -422,6 +509,17 @@ actor RuntimeState {
             .toolFailed(
                 tool: name,
                 message: message
+            ),
+            revision: nil,
+            record: EvidenceRecord(
+                id: UUID(),
+                taskID: currentTaskID(),
+                kind: .diagnostic,
+                tool: name,
+                path: nil,
+                revisionID: nil,
+                createdAt: Date(),
+                detail: "tool failed: " + message
             )
         )
 
@@ -432,9 +530,76 @@ actor RuntimeState {
         validation
     }
 
+    // MARK: v0.29 revision-aware truth plumbing
+
+    /// Push ArtifactGraph.currentMap() after each tool execution so
+    /// requirement evaluation sees revision truth. Cheap dictionary assign.
+    func setCurrentRevisions(_ map: [String: ArtifactRevisionID]) {
+        currentRevisions = map
+        evidenceStore.setCurrentRevisions(map)
+    }
+
+    func journalRecords() -> [EvidenceRecord] {
+        evidenceStore.records
+    }
+
+    private func currentTaskID() -> String {
+        spec.map { "\($0.id)" } ?? "no-task"
+    }
+
+    private func record(
+        kind: EvidenceKind,
+        tool: String,
+        path: String?,
+        revision: ArtifactRevisionID?,
+        detail: String
+    ) {
+        evidenceStore.appendRecord(EvidenceRecord(
+            id: UUID(),
+            taskID: currentTaskID(),
+            kind: kind,
+            tool: tool,
+            path: path,
+            revisionID: revision?.rawValue,
+            createdAt: Date(),
+            detail: detail
+        ))
+    }
+
+    /// Restart restore: rebuild evidence truth from persisted records.
+    /// Transient in-flight failure flags are cleared (the crashed tool died
+    /// with the process); the message is kept for conversational context.
+    /// Validation never claims "validated" for a non-current revision —
+    /// freshness is recomputed from the restored graph map on next snapshot.
+    func restore(
+        spec restoredSpec: TaskSpec?,
+        requirements: [TaskRequirement],
+        items: [TaskEvidence],
+        itemRevisions: [ArtifactRevisionID?],
+        records: [EvidenceRecord],
+        current map: [String: ArtifactRevisionID],
+        lastFailure: String?
+    ) {
+        spec = restoredSpec
+        runtimeRequirements = requirements
+        evidenceStore.restore(
+            items: items,
+            itemRevisions: itemRevisions,
+            records: records,
+            current: map
+        )
+        currentRevisions = map
+        validation = ValidationState()
+        validation.lastFailure = lastFailure
+        toolCount = items.count
+        state = .requested
+        updateState()
+    }
+
     func taskSnapshot() -> TaskRuntimeSnapshot {
         updateValidationCompatibility()
 
+        evidenceStore.setCurrentRevisions(currentRevisions)
         let missing = evidenceStore.missing(from: runtimeRequirements)
         let complete =
             spec != nil &&
@@ -449,6 +614,8 @@ actor RuntimeState {
             state = .inProgress
         }
 
+        let revisions = evidenceStore.itemRevisionList()
+        let stale = revisions.indices.filter { !evidenceStore.isItemFresh($0) }
         return TaskRuntimeSnapshot(
             phase: phase(for: state, missing: missing),
             semanticState: state,
@@ -461,7 +628,10 @@ actor RuntimeState {
             readPaths: readPaths,
             openedPaths: openedPaths,
             validatedPaths: validatedPaths,
-            resolvedTargetPath: effectiveTargetPath()
+            resolvedTargetPath: effectiveTargetPath(),
+            artifactRevisions: currentRevisions,
+            evidenceRevisions: revisions,
+            staleEvidenceIndices: stale
         )
     }
 

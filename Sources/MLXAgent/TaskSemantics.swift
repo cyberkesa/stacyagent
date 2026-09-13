@@ -1,6 +1,6 @@
 import Foundation
 
-struct TaskID: Hashable, Sendable, CustomStringConvertible {
+struct TaskID: Hashable, Sendable, Codable, CustomStringConvertible {
     let rawValue: UUID
 
     init(_ rawValue: UUID = UUID()) {
@@ -12,7 +12,7 @@ struct TaskID: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-struct ArtifactID: Hashable, Sendable, CustomStringConvertible {
+struct ArtifactID: Hashable, Sendable, Codable, CustomStringConvertible {
     let rawValue: UUID
 
     init(_ rawValue: UUID = UUID()) {
@@ -24,7 +24,7 @@ struct ArtifactID: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-enum ArtifactType: String, Hashable, Sendable {
+enum ArtifactType: String, Hashable, Sendable, Codable {
     case source
     case document
     case web
@@ -58,7 +58,7 @@ enum ArtifactType: String, Hashable, Sendable {
     }
 }
 
-struct ArtifactRef: Hashable, Sendable, CustomStringConvertible {
+struct ArtifactRef: Hashable, Sendable, Codable, CustomStringConvertible {
     let id: ArtifactID
     let path: String
     let type: ArtifactType
@@ -84,7 +84,7 @@ struct ArtifactRef: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-enum TaskKind: String, Hashable, Sendable {
+enum TaskKind: String, Hashable, Sendable, Codable {
     case create
     case modify
     case inspect
@@ -98,7 +98,7 @@ enum TaskKind: String, Hashable, Sendable {
     case converse
 }
 
-enum DesiredState: String, Hashable, Sendable {
+enum DesiredState: String, Hashable, Sendable, Codable {
     case exists
     case observed
     case modified
@@ -109,13 +109,52 @@ enum DesiredState: String, Hashable, Sendable {
     case externalEffect
 }
 
-enum TaskConstraint: Hashable, Sendable, CustomStringConvertible {
+enum TaskConstraint: Hashable, Sendable, Codable, CustomStringConvertible {
     case noDependencyInstall
     case simplestImplementation
     case explicitReadBack
     case preserveExisting
     case minimumLineCount(Int)
     case userSpecified(String)
+
+    private enum Code: String, Codable {
+        case noDependencyInstall, simplestImplementation, explicitReadBack
+        case preserveExisting, minimumLineCount, userSpecified
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code, intValue, stringValue
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Code.self, forKey: .code) {
+        case .noDependencyInstall: self = .noDependencyInstall
+        case .simplestImplementation: self = .simplestImplementation
+        case .explicitReadBack: self = .explicitReadBack
+        case .preserveExisting: self = .preserveExisting
+        case .minimumLineCount:
+            self = .minimumLineCount(try container.decode(Int.self, forKey: .intValue))
+        case .userSpecified:
+            self = .userSpecified(try container.decode(String.self, forKey: .stringValue))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .noDependencyInstall: try container.encode(Code.noDependencyInstall, forKey: .code)
+        case .simplestImplementation: try container.encode(Code.simplestImplementation, forKey: .code)
+        case .explicitReadBack: try container.encode(Code.explicitReadBack, forKey: .code)
+        case .preserveExisting: try container.encode(Code.preserveExisting, forKey: .code)
+        case .minimumLineCount(let count):
+            try container.encode(Code.minimumLineCount, forKey: .code)
+            try container.encode(count, forKey: .intValue)
+        case .userSpecified(let value):
+            try container.encode(Code.userSpecified, forKey: .code)
+            try container.encode(value, forKey: .stringValue)
+        }
+    }
 
     var description: String {
         switch self {
@@ -135,9 +174,35 @@ enum TaskConstraint: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-enum TargetSelector: Hashable, Sendable, CustomStringConvertible {
+enum TargetSelector: Hashable, Sendable, Codable, CustomStringConvertible {
     case any
     case path(String)
+
+    private enum Code: String, Codable {
+        case any, path
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code, path
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Code.self, forKey: .code) {
+        case .any: self = .any
+        case .path: self = .path(try container.decode(String.self, forKey: .path))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .any: try container.encode(Code.any, forKey: .code)
+        case .path(let value):
+            try container.encode(Code.path, forKey: .code)
+            try container.encode(value, forKey: .path)
+        }
+    }
 
     var path: String? {
         if case .path(let value) = self { return value }
@@ -163,7 +228,7 @@ enum TargetSelector: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-enum TaskRequirement: Hashable, Sendable, CustomStringConvertible {
+enum TaskRequirement: Hashable, Sendable, Codable, CustomStringConvertible {
     case observe(TargetSelector)
     case observeAfterMutation(TargetSelector)
     case mutate(TargetSelector)
@@ -174,6 +239,79 @@ enum TaskRequirement: Hashable, Sendable, CustomStringConvertible {
     case readBack(TargetSelector)
     case externalEffect
     case externalArtifact(ArtifactType)
+
+    private enum Code: String, Codable {
+        case observe, observeAfterMutation, mutate, mutateCount, launch
+        case inspectBeforeLaunch, validate, readBack, externalEffect, externalArtifact
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case code, target, count, artifact
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(Code.self, forKey: .code) {
+        case .observe:
+            self = .observe(try container.decode(TargetSelector.self, forKey: .target))
+        case .observeAfterMutation:
+            self = .observeAfterMutation(try container.decode(TargetSelector.self, forKey: .target))
+        case .mutate:
+            self = .mutate(try container.decode(TargetSelector.self, forKey: .target))
+        case .mutateCount:
+            self = .mutateCount(
+                try container.decode(TargetSelector.self, forKey: .target),
+                try container.decode(Int.self, forKey: .count)
+            )
+        case .launch:
+            self = .launch(try container.decode(TargetSelector.self, forKey: .target))
+        case .inspectBeforeLaunch:
+            self = .inspectBeforeLaunch(try container.decode(TargetSelector.self, forKey: .target))
+        case .validate:
+            self = .validate(try container.decode(TargetSelector.self, forKey: .target))
+        case .readBack:
+            self = .readBack(try container.decode(TargetSelector.self, forKey: .target))
+        case .externalEffect: self = .externalEffect
+        case .externalArtifact:
+            self = .externalArtifact(try container.decode(ArtifactType.self, forKey: .artifact))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .observe(let target):
+            try container.encode(Code.observe, forKey: .code)
+            try container.encode(target, forKey: .target)
+        case .observeAfterMutation(let target):
+            try container.encode(Code.observeAfterMutation, forKey: .code)
+            try container.encode(target, forKey: .target)
+        case .mutate(let target):
+            try container.encode(Code.mutate, forKey: .code)
+            try container.encode(target, forKey: .target)
+        case .mutateCount(let target, let count):
+            try container.encode(Code.mutateCount, forKey: .code)
+            try container.encode(target, forKey: .target)
+            try container.encode(count, forKey: .count)
+        case .launch(let target):
+            try container.encode(Code.launch, forKey: .code)
+            try container.encode(target, forKey: .target)
+        case .inspectBeforeLaunch(let target):
+            try container.encode(Code.inspectBeforeLaunch, forKey: .code)
+            try container.encode(target, forKey: .target)
+        case .validate(let target):
+            try container.encode(Code.validate, forKey: .code)
+            try container.encode(target, forKey: .target)
+        case .readBack(let target):
+            try container.encode(Code.readBack, forKey: .code)
+            try container.encode(target, forKey: .target)
+        case .externalEffect:
+            try container.encode(Code.externalEffect, forKey: .code)
+        case .externalArtifact(let type):
+            try container.encode(Code.externalArtifact, forKey: .code)
+            try container.encode(type, forKey: .artifact)
+        }
+    }
 
     var description: String {
         switch self {
@@ -201,12 +339,12 @@ enum TaskRequirement: Hashable, Sendable, CustomStringConvertible {
     }
 }
 
-enum TaskOutputPolicy: String, Sendable {
+enum TaskOutputPolicy: String, Sendable, Codable {
     case deterministicAck
     case synthesis
 }
 
-struct TaskSpec: Sendable, CustomStringConvertible {
+struct TaskSpec: Sendable, Codable, CustomStringConvertible {
     let id: TaskID
     let parentID: TaskID?
     let mode: TurnMode
@@ -347,11 +485,118 @@ enum TaskEvidence: Sendable, CustomStringConvertible {
 struct EvidenceStore: Sendable {
     private(set) var items: [TaskEvidence] = []
 
+    // MARK: v0.29 revision-aware truth (same store, no parallel system)
+    //
+    // items[] stays the legacy order-based projection. records[] is the
+    // typed revision-bound journal; itemRevisions[] links each legacy item
+    // to its concrete revision (nil = unknown = legacy behavior).
+    // current[] is pushed from ArtifactGraph before requirement evaluation.
+    private(set) var records: [EvidenceRecord] = []
+    private var itemRevisions: [ArtifactRevisionID?] = []
+    private var current: [String: ArtifactRevisionID] = [:]
+
     mutating func append(_ evidence: TaskEvidence) {
         items.append(evidence)
+        itemRevisions.append(nil)
+    }
+
+    /// Canonical append: legacy item + revision link + typed record, atomically.
+    mutating func append(
+        _ evidence: TaskEvidence,
+        revision: ArtifactRevisionID?,
+        record: EvidenceRecord?
+    ) {
+        items.append(evidence)
+        itemRevisions.append(revision)
+        if let record {
+            records.append(record)
+        }
+    }
+
+    mutating func setCurrentRevisions(_ map: [String: ArtifactRevisionID]) {
+        current = map
+    }
+
+    /// Append a typed journal record without a legacy item (diagnostics).
+    mutating func appendRecord(_ record: EvidenceRecord) {
+        records.append(record)
+    }
+
+    /// Parallel revision list for snapshot/diagnostics.
+    func itemRevisionList() -> [ArtifactRevisionID?] {
+        itemRevisions + Array(
+            repeating: nil,
+            count: max(0, items.count - itemRevisions.count)
+        )
+    }
+
+    /// Restart restore: rebuild both views from persisted truth.
+    /// Legacy items are rebuilt from records when `items` is empty.
+    mutating func restore(
+        items: [TaskEvidence],
+        itemRevisions: [ArtifactRevisionID?],
+        records: [EvidenceRecord],
+        current map: [String: ArtifactRevisionID]
+    ) {
+        self.items = items
+        self.itemRevisions = itemRevisions
+        self.records = records
+        self.current = map
+    }
+
+    /// Revision bound to a legacy item index (test/diagnostic introspection).
+    func revision(of index: Int) -> ArtifactRevisionID? {
+        guard items.indices.contains(index) else { return nil }
+        return itemRevisions[index]
+    }
+
+    /// Freshness of one legacy item against the current graph map.
+    /// Untracked paths and pathless evidence defer to legacy (true).
+    func isItemFresh(_ index: Int) -> Bool {
+        guard items.indices.contains(index) else { return false }
+        guard let path = items[index].path else { return true }
+        guard let currentRevision = current[path] else { return true }
+        return itemRevisions[index] == currentRevision
     }
 
     func satisfies(_ requirement: TaskRequirement) -> Bool {
+        switch requirement {
+        case .observe(let target):
+            return (satisfiesLegacy(requirement) && satisfiesFreshness(requirement))
+                || writerKnows(target: target, after: nil)
+        case .observeAfterMutation(let target):
+            return (satisfiesLegacy(requirement) && satisfiesFreshness(requirement))
+                || writerKnows(target: target, after: firstMutationIndex(target))
+        default:
+            return satisfiesLegacy(requirement) && satisfiesFreshness(requirement)
+        }
+    }
+
+    /// Writer-knows rule (§7): our own fresh mutation of the CURRENT revision
+    /// observes it — no extra disk readback is needed after an atomic edit.
+    /// Applies only to tracked paths with a revision-bound mutation record,
+    /// so blind writes can never satisfy observation on unknown state.
+    /// (Tool-level ProtocolEngine.blockReason additionally rejects mutations
+    /// that precede the first observation.)
+    private func writerKnows(target: TargetSelector, after: Int?) -> Bool {
+        guard let path = target.path,
+              let currentRevision = current[path] else {
+            return false
+        }
+        let lowerBound = after ?? -1
+        return items.indices.contains { index in
+            guard index > lowerBound else { return false }
+            guard case .mutated(_, let itemPath, _, _) = items[index],
+                  target.matches(itemPath) else {
+                return false
+            }
+            guard itemRevisions.indices.contains(index) else { return false }
+            return itemRevisions[index] == currentRevision
+        }
+    }
+
+    /// Legacy order-based evaluation (pre-v0.29 semantics, unchanged).
+    func satisfiesLegacy(_ requirement: TaskRequirement) -> Bool {
         switch requirement {
         case .observe(let target):
             return items.contains { evidence in
@@ -479,6 +724,105 @@ struct EvidenceStore: Sendable {
         }
     }
 
+    // MARK: v0.29 revision freshness gate
+    //
+    // A revision-sensitive requirement is satisfied only by evidence bound
+    // to the CURRENT graph revision of its path. Untracked paths (no graph
+    // node) and pathless requirements defer to legacy order-based logic.
+    // Writer-knows rule (§7): a fresh mutation of R counts as observation
+    // of R — no extra readback is needed after our own atomic edit.
+    func satisfiesFreshness(_ requirement: TaskRequirement) -> Bool {
+        switch requirement {
+        case .observe(let target):
+            return freshObservationExists(target: target, afterMutation: nil)
+        case .observeAfterMutation(let target):
+            return freshObservationExists(target: target, afterMutation: firstMutationIndex(target))
+        case .validate(let target):
+            return freshItemExists(
+                target: target,
+                after: lastMutationIndex(target),
+                kinds: [.validated]
+            )
+        case .readBack(let target):
+            return freshItemExists(
+                target: target,
+                after: lastMutationIndex(target),
+                kinds: [.readBackMatched]
+            )
+        case .launch(let target):
+            return freshItemExists(
+                target: target,
+                after: lastMutationIndex(target),
+                kinds: [.launched]
+            )
+        case .inspectBeforeLaunch(let target):
+            let after = lastMutationIndex(target)
+            guard freshObservationExists(target: target, afterMutation: after) else {
+                return false
+            }
+            return freshItemExists(target: target, after: after, kinds: [.launched])
+        case .mutate, .mutateCount, .externalEffect, .externalArtifact:
+            // Mutations create revisions (revision-agnostic counting);
+            // external effects are pathless.
+            return true
+        }
+    }
+
+    /// Evidence kinds relevant for freshness checks.
+    private enum FreshKind {
+        case observed
+        case validated
+        case readBackMatched
+        case launched
+        case mutated
+    }
+
+    private func freshObservationExists(target: TargetSelector, afterMutation firstMutation: Int?) -> Bool {
+        guard let path = target.path else { return true }
+        guard current[path] != nil else { return true }
+        let after = firstMutation ?? -1
+        return items.indices.contains { index in
+            guard index > after, isItemFresh(index) else { return false }
+            switch items[index] {
+            case .observed(_, let itemPath),
+                 .validated(_, let itemPath):
+                return target.matches(itemPath)
+            case .readBack(let itemPath, _):
+                return target.matches(itemPath)
+            case .mutated(_, let itemPath, _, _):
+                // Writer-knows: our own fresh mutation observes the revision.
+                return target.matches(itemPath)
+            default:
+                return false
+            }
+        }
+    }
+
+    private func freshItemExists(
+        target: TargetSelector,
+        after: Int?,
+        kinds: [FreshKind]
+    ) -> Bool {
+        guard let path = target.path else { return true }
+        guard current[path] != nil else { return true }
+        let lowerBound = after ?? -1
+        return items.indices.contains { index in
+            guard index > lowerBound, isItemFresh(index) else { return false }
+            switch items[index] {
+            case .validated(_, let itemPath):
+                return kinds.contains(.validated) && target.matches(itemPath)
+            case .readBack(let itemPath, let matched):
+                return kinds.contains(.readBackMatched) && matched && target.matches(itemPath)
+            case .launched(_, let itemPath):
+                return kinds.contains(.launched) && target.matches(itemPath)
+            case .observed(_, let itemPath):
+                return kinds.contains(.observed) && target.matches(itemPath)
+            default:
+                return false
+            }
+        }
+    }
+
     private static func externalURL(
         _ value: String,
         matches type: ArtifactType,
@@ -535,6 +879,17 @@ struct EvidenceStore: Sendable {
 
     func missing(from requirements: [TaskRequirement]) -> [TaskRequirement] {
         requirements.filter { !satisfies($0) }
+    }
+
+    /// Revision-aware evaluation with an explicit graph map. RuntimeState
+    /// pushes ArtifactGraph.currentMap() before calling this.
+    func missing(
+        from requirements: [TaskRequirement],
+        current map: [String: ArtifactRevisionID]
+    ) -> [TaskRequirement] {
+        var scoped = self
+        scoped.setCurrentRevisions(map)
+        return requirements.filter { !scoped.satisfies($0) }
     }
 }
 

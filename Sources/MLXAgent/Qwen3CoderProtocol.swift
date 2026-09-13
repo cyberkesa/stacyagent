@@ -15,19 +15,10 @@ enum Qwen3CoderProtocol {
     /// Detects a concrete implementation artifact in ordinary prose. This is an
     /// output-shape check, not natural-language intent matching: a CHAT turn that
     /// emits source code while a project is in focus crossed the execution boundary.
+    /// Delegates to the provider-agnostic runtime check; Qwen parsing itself
+    /// stays inside the MLX/Qwen adapter layer.
     static func containsImplementationArtifact(_ text: String) -> Bool {
-        let fencedSource = #"(?s)```[^\n]*\n.+?```"#
-        if let regex = try? NSRegularExpression(pattern: fencedSource),
-           regex.firstMatch(
-            in: text,
-            range: NSRange(text.startIndex..., in: text)
-           ) != nil {
-            return true
-        }
-
-        let lower = text.lowercased()
-        return (lower.contains("<!doctype html") || lower.contains("<html")) &&
-            lower.contains("</html>")
+        ProviderArtifactCheck.containsImplementationArtifact(text)
     }
 
     static func analyze(_ text: String) -> Qwen3CoderParseResult {
