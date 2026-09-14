@@ -1061,6 +1061,7 @@ enum TaskCompiler {
         let discourse = DiscourseResolver.analyze(userText)
         let stagedBreakAndRepair = discourse.stagedBreakAndRepair
         let requestedApplication = discourse.requestedApplication
+        let computationSearch = ComputationIntentParser.searchIntent(userText)
 
         let failureFeedback = continuity?.failureFeedback == true
         let failureKind = continuity?.failureKind ?? .none
@@ -1075,7 +1076,8 @@ enum TaskCompiler {
             !discourse.launchRequest &&
             !discourse.inspectionRequest &&
             !discourse.explainRequest &&
-            !discourse.verifyRequest
+            !discourse.verifyRequest &&
+            computationSearch == nil
 
         let repairRequested =
             discourse.revisionRequest ||
@@ -1129,6 +1131,13 @@ enum TaskCompiler {
         }
         if decision.mode == .mcpRead {
             kinds.insert(.inspect)
+            desired.insert(.observed)
+            appendUnique(.observe(.any), to: &requirements)
+        }
+
+        if computationSearch != nil,
+           decision.mode == .agent || decision.mode == .inspect {
+            kinds.insert(.search)
             desired.insert(.observed)
             appendUnique(.observe(.any), to: &requirements)
         }
@@ -1292,7 +1301,9 @@ enum TaskCompiler {
         }
 
         let outputPolicy: TaskOutputPolicy
-        if kinds.contains(.externalAction) ||
+        if kinds.contains(.search) {
+            outputPolicy = .deterministicAck
+        } else if kinds.contains(.externalAction) ||
            kinds.contains(.explain) ||
            (
                decision.mode == .inspect &&

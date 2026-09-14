@@ -1919,6 +1919,38 @@ for line in sys.stdin:
             }
         }
 
+        // v0.31 Context Engine deterministic scenarios A-O + K/L.
+        for result in await ContextSelfTest.runAll() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+        for result in await ContextSelfTest.runWithCoordinator() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+        for result in await ContextSelfTest.runPackageValidation() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
+        // v0.31.5 provider-neutral Computation Router scenarios A-K.
+        for result in await ComputationSelfTest.runAll() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
         // v0.30 §21 real LSP integration (opt-in via SLTA_LSP_INTEGRATION=1).
         for result in await LSPIntegrationSelfTest.runIfEnabled() {
             if result.passed {

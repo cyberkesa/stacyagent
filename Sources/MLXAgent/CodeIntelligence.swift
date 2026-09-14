@@ -98,6 +98,7 @@ struct UnresolvedLocation: Sendable, Hashable {
     var startCharacter: Int?
     var endLine: Int?
     var endCharacter: Int?
+    var encoding: LSPPositionEncoding = .utf16
 }
 
 /// Explicitly unresolved workspace symbol: identity without spans.
@@ -195,8 +196,8 @@ protocol CodeIntelligenceProvider: Sendable {
 // MARK: - UTF-8 span converter (boundary coordinate model)
 //
 // LSP positions are line/character in an encoding negotiated per server
-// (default UTF-16). The runtime core NEVER sees them: providers convert to
-// UTF-8 byte offsets against the EXACT snapshot content before returning.
+// (default UTF-16). Providers preserve that encoding on unresolved locations;
+// CodeIntelligenceEngine binds them to exact snapshots and UTF-8 spans.
 
 enum UTF8SpanConverter {
     /// LSP (line, character-in-encoding) -> UTF-8 byte offset.
@@ -273,7 +274,7 @@ enum UTF8SpanConverter {
     }
 }
 
-enum LSPPositionEncoding: String, Sendable {
+enum LSPPositionEncoding: String, Sendable, Hashable {
     case utf8 = "utf-8"
     case utf16 = "utf-16"
     case utf32 = "utf-32"

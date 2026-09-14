@@ -32,18 +32,21 @@ final class ToolRegistry: @unchecked Sendable {
     /// lazy LSP backend when sourcekit-lsp exists, nothing otherwise.
     /// Tests inject an engine with a Fake provider.
     let codeIntelligence: CodeIntelligenceEngine
+    let computationRouter: ComputationRouter
 
     init(
         workspace: Workspace,
         mcp: MCPBridge,
         events: EventBus,
         runtime: RuntimeEnvironment,
-        codeIntelligence: CodeIntelligenceEngine? = nil
+        codeIntelligence: CodeIntelligenceEngine? = nil,
+        computationRouter: ComputationRouter? = nil
     ) {
         self.workspace = workspace
         self.mcp = mcp
         self.events = events
         self.runtime = runtime
+        self.computationRouter = computationRouter ?? ComputationRouter(events: events)
         if let codeIntelligence {
             self.codeIntelligence = codeIntelligence
         } else {
@@ -740,6 +743,48 @@ final class ToolRegistry: @unchecked Sendable {
         await state.toolStarted()
         await events.emit(.toolStarted(name: name))
         let start = ContinuousClock.now
+        let routed: (ComputationRequest, ComputationDecision)?
+        if case .protocolEngine = invocation.source {
+            let intent: ComputationOperationIntent?
+            switch name {
+            case "read_file":
+                intent = args["path"].map { .exactLocation(path: $0) }
+            case "validate_file":
+                intent = args["path"].map {
+                    .structural(description: "validate \($0)", available: true)
+                }
+            case "semantic_rename":
+                if let symbol = args["symbol"],
+                   let newName = args["new_name"] ?? args["newName"] {
+                    intent = .semanticRename(
+                        symbol: symbol, newName: newName, path: args["path"]
+                    )
+                } else {
+                    intent = nil
+                }
+            default:
+                intent = nil
+            }
+            if let intent {
+                let precision: ComputationPrecisionClass = name == "semantic_rename"
+                    ? .semanticIdentity : (name == "validate_file" ? .structural : .exactText)
+                let request = ComputationRequest(
+                    taskID: taskID,
+                    requirement: before.missingRequirements.first?.description ?? name,
+                    intent: intent,
+                    target: args["path"],
+                    workspaceEpoch: workspace.graph.semanticGeneration(),
+                    revisions: workspace.graph.currentMap(),
+                    requiredPrecision: precision,
+                    requiredConfidence: before.spec?.compileConfidence ?? 1
+                )
+                routed = (request, await computationRouter.route(request))
+            } else {
+                routed = nil
+            }
+        } else {
+            routed = nil
+        }
 
         do {
             let result: String
@@ -933,6 +978,17 @@ final class ToolRegistry: @unchecked Sendable {
             await state.toolFinished(seconds: Self.seconds(elapsed))
             await state.setCurrentRevisions(workspace.graph.currentMap())
             await events.emit(.toolFinished(name: name, ok: true, detail: compact(result), duration: elapsed))
+            if let (request, decision) = routed {
+                await computationRouter.record(
+                    request,
+                    decision: decision,
+                    result: ComputationResult(
+                        status: .success, output: result, candidateCount: 1,
+                        evidenceSufficient: true, modelAvoided: true
+                    ),
+                    durationMs: RuntimeCoordinator.milliseconds(elapsed)
+                )
+            }
             // v0.28 runtime stream: mutation and validation evidence as
             // structured events (additive; existing UI ignores unknown cases
             // except TerminalUI's one-line arms).
@@ -959,6 +1015,17 @@ final class ToolRegistry: @unchecked Sendable {
             await state.toolFinished(seconds: Self.seconds(elapsed))
             await state.setCurrentRevisions(workspace.graph.currentMap())
             await events.emit(.toolFinished(name: name, ok: false, detail: compact(message), duration: elapsed))
+            if let (request, decision) = routed {
+                await computationRouter.record(
+                    request,
+                    decision: decision,
+                    result: ComputationResult(
+                        status: .failed, output: message, candidateCount: 0,
+                        evidenceSufficient: false, modelAvoided: true
+                    ),
+                    durationMs: RuntimeCoordinator.milliseconds(elapsed)
+                )
+            }
             if name == "validate_file" {
                 await events.emit(.validationFinished(path: args["path"] ?? name, ok: false))
             }
@@ -980,16 +1047,21 @@ final class ToolRegistry: @unchecked Sendable {
         maxActions: Int = 8
     ) async -> [(name: String, result: String)] {
         var output: [(name: String, result: String)] = []
+        var attempted = Set<String>()
 
         for _ in 0..<maxActions {
             let before = await state.taskSnapshot()
             let decision = ProtocolEngine.decision(for: before, allowed: allowed)
 
             guard case .deterministic(let action) = decision else { break }
+            let attemptKey = action.description + "|" +
+                RuntimeCoordinator.taskProgressFingerprint(before)
+            guard attempted.insert(attemptKey).inserted else { break }
 
             let invocation = action.normalizedInvocation
             let result = await executeNormalized(invocation, allowed: allowed)
             output.append((name: invocation.name, result: result))
+            if result.contains(#""ok":false"#) { break }
 
             let after = await state.taskSnapshot()
             if after.isComplete || after.validation.lastToolFailed {
@@ -1305,6 +1377,166 @@ extension ToolRegistry {
     }
 }
 
+// MARK: - v0.31.5 selected computation executors
+
+extension ToolRegistry {
+    func computationEpoch() async -> UInt64 {
+        workspace.graph.semanticGeneration()
+    }
+
+    func executeComputation(
+        _ request: ComputationRequest,
+        decision: ComputationDecision
+    ) async -> ComputationResult {
+        if let reused = decision.reusedResult { return reused }
+        do {
+            let output: String
+            let candidates: Int
+            let sufficient: Bool
+            switch decision.strategy {
+            case .literalSearch:
+                switch request.intent {
+                case .literalSearch(let query, let path):
+                    output = try workspace.literalSearch(query, path: path)
+                case .symbolIdentity(let symbol, let path):
+                    output = try workspace.literalSearch(symbol, path: path ?? ".")
+                case .exactLocation(let path):
+                    output = try workspace.readFile(path)
+                default:
+                    return ComputationResult(
+                        status: .unsupported, output: "literal executor cannot handle intent",
+                        candidateCount: 0, evidenceSufficient: false,
+                        modelAvoided: true
+                    )
+                }
+                candidates = output == "no matches"
+                    ? 0 : output.split(separator: "\n").count
+                sufficient = decision.sufficientForRequest
+                await state.observation("literal_search")
+
+            case .regexSearch:
+                guard case .regexSearch(let pattern, let path) = request.intent else {
+                    return ComputationResult(
+                        status: .unsupported, output: "regex executor cannot handle intent",
+                        candidateCount: 0, evidenceSufficient: false,
+                        modelAvoided: true
+                    )
+                }
+                output = try workspace.search(pattern, path: path)
+                candidates = output == "no matches"
+                    ? 0 : output.split(separator: "\n").count
+                sufficient = decision.sufficientForRequest
+                await state.observation("regex_search")
+
+            case .semanticQuery:
+                let symbol: String
+                let path: String?
+                switch request.intent {
+                case .symbolIdentity(let value, let scope),
+                     .definition(let value, let scope),
+                     .references(let value, let scope):
+                    symbol = value
+                    path = scope
+                case .diagnostics(let target):
+                    let items = await codeIntelligence.diagnostics(path: target)
+                    output = items.map {
+                        "\($0.path)@\($0.revision): \($0.severity): \($0.message)"
+                    }.joined(separator: "\n")
+                    candidates = items.count
+                    sufficient = true
+                    await state.observation("code_intelligence", path: target)
+                    await state.setCurrentRevisions(workspace.graph.currentMap())
+                    return ComputationResult(
+                        status: .success, output: output,
+                        candidateCount: candidates, evidenceSufficient: sufficient,
+                        modelAvoided: true
+                    )
+                default:
+                    return ComputationResult(
+                        status: .unsupported, output: "semantic executor cannot handle intent",
+                        candidateCount: 0, evidenceSufficient: false,
+                        modelAvoided: true
+                    )
+                }
+                let resolved = await codeIntelligence.resolve(symbol: symbol, path: path)
+                if case .symbolIdentity = request.intent {
+                    output = resolved.map {
+                        "\($0.symbol.path):\($0.symbol.name) bytes " +
+                        "\($0.symbol.nameSpan.startByte)..<\($0.symbol.nameSpan.endByte)"
+                    }.joined(separator: "\n")
+                    candidates = resolved.count
+                    sufficient = resolved.count == 1
+                } else if resolved.count == 1,
+                          let target = resolved.first,
+                          let snapshot = try? codeIntelligence.snapshot(
+                            path: target.symbol.path
+                          ) {
+                    let locations: [CodeLocation]
+                    if case .definition = request.intent {
+                        locations = await codeIntelligence.definition(
+                            snapshot: snapshot,
+                            offset: target.symbol.nameSpan.startByte
+                        ) ?? []
+                    } else {
+                        locations = await codeIntelligence.references(
+                            snapshot: snapshot,
+                            offset: target.symbol.nameSpan.startByte
+                        ) ?? []
+                    }
+                    output = locations.map {
+                        "\($0.path)@\($0.revision) bytes " +
+                        "\($0.span.startByte)..<\($0.span.endByte)"
+                    }.joined(separator: "\n")
+                    candidates = locations.count
+                    sufficient = true
+                } else {
+                    output = resolved.isEmpty ? "symbol not resolved" : "symbol is ambiguous"
+                    candidates = resolved.count
+                    sufficient = false
+                }
+                await state.observation("code_intelligence", path: path)
+
+            case .structuralQuery:
+                guard case .structural(let description, let available) = request.intent,
+                      available, let path = request.target else {
+                    return ComputationResult(
+                        status: .unsupported, output: "structural executor unavailable",
+                        candidateCount: 0, evidenceSufficient: false,
+                        modelAvoided: true
+                    )
+                }
+                _ = description
+                output = try workspace.validateFile(path)
+                candidates = 1
+                sufficient = true
+                await state.validationSuccess(
+                    "validate_file", isRealValidation: true, path: path,
+                    revisionID: workspace.graph.currentRevisionID(path: path)
+                )
+
+            case .contextAndModel, .unsupported, .ambiguous:
+                return ComputationResult(
+                    status: .unsupported, output: "no deterministic executor selected",
+                    candidateCount: 0, evidenceSufficient: false,
+                    modelAvoided: false
+                )
+            }
+            await state.setCurrentRevisions(workspace.graph.currentMap())
+            return ComputationResult(
+                status: .success, output: output,
+                candidateCount: candidates, evidenceSufficient: sufficient,
+                modelAvoided: true
+            )
+        } catch {
+            return ComputationResult(
+                status: .failed, output: String(describing: error),
+                candidateCount: 0, evidenceSufficient: false,
+                modelAvoided: true
+            )
+        }
+    }
+}
+
 // MARK: - v0.30 semantic rename execution (deterministic, zero-model)
 
 extension ToolRegistry {
@@ -1355,6 +1587,16 @@ extension ToolRegistry {
             do {
                 for path in files {
                     _ = try workspace.validateFile(path)
+                }
+                // v0.31 §0: project-level validation when determinable.
+                // No invented commands: only ProjectProfile-suggested checks
+                // (SwiftPM -> "swift build"). Task is DONE only after it.
+                let profile = ProjectProfile.scan(root: workspace.root)
+                let allSwift = !files.isEmpty && files.allSatisfy {
+                    $0.lowercased().hasSuffix(".swift")
+                }
+                if allSwift, profile.suggestedChecks.contains("swift build") {
+                    _ = try workspace.shell("swift build")
                 }
             } catch {
                 for path in files.reversed() {

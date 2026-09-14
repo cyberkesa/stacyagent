@@ -36,6 +36,28 @@ protocol RuntimeToolExecutor: Sendable {
         allowed: Set<String>
     ) async -> [(name: String, result: String)]
     func providerToolSpecs(named: Set<String>) -> [ProviderToolSpec]
+    func computationEpoch() async -> UInt64
+    func executeComputation(
+        _ request: ComputationRequest,
+        decision: ComputationDecision
+    ) async -> ComputationResult
+}
+
+extension RuntimeToolExecutor {
+    func computationEpoch() async -> UInt64 { 0 }
+
+    func executeComputation(
+        _ request: ComputationRequest,
+        decision: ComputationDecision
+    ) async -> ComputationResult {
+        ComputationResult(
+            status: .unsupported,
+            output: "selected computation executor is unavailable",
+            candidateCount: 0,
+            evidenceSufficient: false,
+            modelAvoided: false
+        )
+    }
 }
 
 // MARK: - Input / result
@@ -51,6 +73,8 @@ struct RuntimeTaskInput: Sendable {
     var runtimeContext: String
     var allowedTools: Set<String>
     var agentMaxTokens: Int?
+    /// v0.31 context budget override (nil = engine default).
+    var contextBudget: ContextBudget?
 
     init(
         userText: String,
@@ -60,7 +84,8 @@ struct RuntimeTaskInput: Sendable {
         projectInstructions: String = "",
         runtimeContext: String = "",
         allowedTools: Set<String>,
-        agentMaxTokens: Int? = nil
+        agentMaxTokens: Int? = nil,
+        contextBudget: ContextBudget? = nil
     ) {
         self.userText = userText
         self.decision = decision
@@ -70,6 +95,7 @@ struct RuntimeTaskInput: Sendable {
         self.runtimeContext = runtimeContext
         self.allowedTools = allowedTools
         self.agentMaxTokens = agentMaxTokens
+        self.contextBudget = contextBudget
     }
 }
 
@@ -88,6 +114,8 @@ struct RuntimeTaskResult: Sendable {
     var toolResults: Int
     var rounds: Int
     var outcome: RuntimeOutcome
+    /// v0.31 estimated context tokens sent across all model calls.
+    var contextTokens: Int
 
     /// Physical model generations performed. Never conflated with
     /// deterministic actions, tool calls or loop rounds.
@@ -102,15 +130,23 @@ public final class RuntimeCoordinator: Sendable {
     private let executor: any RuntimeToolExecutor
     private let events: EventBus
     private let projectInstructions: String
+    /// v0.31 ContextEngine (optional). Nil preserves v0.28 legacy prompt
+    /// assembly exactly. Deterministic paths never touch it (invariant 15).
+    private let contextEngine: ContextEngine?
+    private let computationRouter: ComputationRouter
 
     init(
         executor: any RuntimeToolExecutor,
         events: EventBus,
-        projectInstructions: String = ""
+        projectInstructions: String = "",
+        contextEngine: ContextEngine? = nil,
+        computationRouter: ComputationRouter? = nil
     ) {
         self.executor = executor
         self.events = events
         self.projectInstructions = projectInstructions
+        self.contextEngine = contextEngine
+        self.computationRouter = computationRouter ?? ComputationRouter(events: events)
     }
 
     // MARK: Entry point
@@ -120,10 +156,14 @@ public final class RuntimeCoordinator: Sendable {
         provider: any ModelProvider
     ) async throws -> RuntimeTaskResult {
         let allowed = input.allowedTools
+        // v0.31: when a ContextEngine is present, conversational excerpt and
+        // project instructions travel as bundle items (with provenance),
+        // not as duplicated instruction preamble.
+        let useContext = contextEngine != nil
         let baseInstructions = Self.baseInstructions(
-            projectInstructions: projectInstructions.isEmpty ? input.projectInstructions : projectInstructions,
+            projectInstructions: useContext ? "" : (projectInstructions.isEmpty ? input.projectInstructions : projectInstructions),
             runtimeContext: input.runtimeContext,
-            sessionExcerpt: input.sessionExcerpt
+            sessionExcerpt: useContext ? "" : input.sessionExcerpt
         )
         provider.beginTaskSession(instructions: baseInstructions)
         defer { provider.endTaskSession() }
@@ -131,9 +171,59 @@ public final class RuntimeCoordinator: Sendable {
         var providerCalls: [ProviderCallTelemetry] = []
         var deterministicActions = 0
         var toolResults = 0
+        var contextTokens = 0
+
+        if let spec = (await executor.taskSnapshot()).spec,
+           spec.kinds.contains(.search),
+           let intent = ComputationIntentParser.searchIntent(spec.originalRequest) {
+            let before = await executor.taskSnapshot()
+            let computationRequest = await makeComputationRequest(
+                snapshot: before,
+                requirement: before.incompleteReason,
+                intent: intent,
+                target: before.resolvedTargetPath,
+                precision: .exactText
+            )
+            let computationDecision = await computationRouter.route(computationRequest)
+            let started = ContinuousClock.now
+            let computationResult: ComputationResult
+            if let reused = computationDecision.reusedResult {
+                computationResult = reused
+            } else {
+                computationResult = await executor.executeComputation(
+                    computationRequest, decision: computationDecision
+                )
+            }
+            await computationRouter.record(
+                computationRequest,
+                decision: computationDecision,
+                result: computationResult,
+                durationMs: computationDecision.cacheHit
+                    ? 0 : Self.milliseconds(ContinuousClock.now - started)
+            )
+            deterministicActions += computationDecision.cacheHit ? 0 : 1
+            toolResults += 1
+            let after = await executor.taskSnapshot()
+            if computationResult.status == .success,
+               computationResult.evidenceSufficient,
+               after.isComplete {
+                await events.emit(.taskCompleted(taskID: Self.taskID(of: after)))
+                return RuntimeTaskResult(
+                    displayText: computationResult.output,
+                    snapshot: after,
+                    providerCalls: providerCalls,
+                    deterministicActions: deterministicActions,
+                    toolResults: toolResults,
+                    rounds: 0,
+                    outcome: .completedDeterministic,
+                    contextTokens: contextTokens
+                )
+            }
+        }
 
         // Deterministic preflight runs before the first model pass when the
         // next missing requirement is already mechanically known.
+        let preflightStart = await executor.taskSnapshot()
         let preflight = await executor.advanceProtocol(allowed: allowed)
         deterministicActions += preflight.count
         var evidence = Self.evidenceBlocks(preflight)
@@ -150,7 +240,8 @@ public final class RuntimeCoordinator: Sendable {
                 deterministicActions: deterministicActions,
                 toolResults: toolResults,
                 rounds: 0,
-                outcome: .completedDeterministic
+                outcome: .completedDeterministic,
+                contextTokens: contextTokens,
             )
         }
 
@@ -163,7 +254,45 @@ public final class RuntimeCoordinator: Sendable {
                 baseInstructions: baseInstructions,
                 providerCalls: &providerCalls,
                 deterministicActions: deterministicActions,
-                toolResults: toolResults
+                toolResults: toolResults,
+                contextTokens: contextTokens
+            )
+        }
+
+        if Self.hasFailedToolResult(preflight) {
+            return RuntimeTaskResult(
+                displayText: "",
+                snapshot: snapshot,
+                providerCalls: providerCalls,
+                deterministicActions: deterministicActions,
+                toolResults: toolResults,
+                rounds: 0,
+                outcome: .incomplete(
+                    snapshot.validation.lastFailure ?? snapshot.incompleteReason
+                ),
+                contextTokens: contextTokens
+            )
+        }
+
+        if !preflight.isEmpty,
+           Self.taskProgressFingerprint(preflightStart) ==
+            Self.taskProgressFingerprint(snapshot),
+           case .deterministic(let beforeAction) = ProtocolEngine.decision(
+            for: preflightStart, allowed: allowed
+           ),
+           case .deterministic(let afterAction) = ProtocolEngine.decision(
+            for: snapshot, allowed: allowed
+           ),
+           beforeAction.description == afterAction.description {
+            return RuntimeTaskResult(
+                displayText: "",
+                snapshot: snapshot,
+                providerCalls: providerCalls,
+                deterministicActions: deterministicActions,
+                toolResults: toolResults,
+                rounds: 0,
+                outcome: .incomplete(snapshot.incompleteReason),
+                contextTokens: contextTokens
             )
         }
 
@@ -174,6 +303,7 @@ public final class RuntimeCoordinator: Sendable {
             evidence: evidence
         )
         var consecutiveNoProgress = 0
+        var attemptedDeterministicActions = Set<String>()
 
         roundLoop: for _ in 0..<input.maxRounds {
             let roundStart = await executor.taskSnapshot()
@@ -192,7 +322,8 @@ public final class RuntimeCoordinator: Sendable {
                         baseInstructions: baseInstructions,
                         providerCalls: &providerCalls,
                         deterministicActions: deterministicActions,
-                        toolResults: toolResults
+                        toolResults: toolResults,
+                        contextTokens: contextTokens
                     )
                 }
                 await events.emit(.taskCompleted(taskID: Self.taskID(of: doneSnapshot)))
@@ -203,7 +334,8 @@ public final class RuntimeCoordinator: Sendable {
                     deterministicActions: deterministicActions,
                     toolResults: toolResults,
                     rounds: providerCalls.count,
-                    outcome: .completedDeterministic
+                    outcome: .completedDeterministic,
+                    contextTokens: contextTokens,
                 )
 
             case .blocked(let reason):
@@ -216,15 +348,23 @@ public final class RuntimeCoordinator: Sendable {
                     deterministicActions: deterministicActions,
                     toolResults: toolResults,
                     rounds: providerCalls.count,
-                    outcome: .blocked(reason)
+                    outcome: .blocked(reason),
+                    contextTokens: contextTokens,
                 )
 
             case .deterministic(let action):
+                let attemptKey = action.description + "|" + roundFingerprint
+                guard attemptedDeterministicActions.insert(attemptKey).inserted else {
+                    break roundLoop
+                }
                 let result = await executor.executeNormalized(action.normalizedInvocation, allowed: allowed)
                 deterministicActions += 1
                 toolResults += 1
                 evidence = Self.evidenceBlocks([(name: action.toolName, result: result)])
                 let after = await executor.taskSnapshot()
+                if Self.hasFailedToolResult([(name: action.toolName, result: result)]) {
+                    break roundLoop
+                }
                 if after.validation.lastToolFailed {
                     let reason = after.validation.lastFailure ?? "deterministic action failed"
                     await events.emit(.taskBlocked(taskID: Self.taskID(of: after), reason: reason))
@@ -235,7 +375,8 @@ public final class RuntimeCoordinator: Sendable {
                         deterministicActions: deterministicActions,
                         toolResults: toolResults,
                         rounds: providerCalls.count,
-                        outcome: .blocked(reason)
+                        outcome: .blocked(reason),
+                        contextTokens: contextTokens,
                     )
                 }
                 if after.isComplete {
@@ -247,7 +388,8 @@ public final class RuntimeCoordinator: Sendable {
                             baseInstructions: baseInstructions,
                             providerCalls: &providerCalls,
                             deterministicActions: deterministicActions,
-                            toolResults: toolResults
+                            toolResults: toolResults,
+                            contextTokens: contextTokens
                         )
                     }
                     await events.emit(.taskCompleted(taskID: Self.taskID(of: after)))
@@ -258,7 +400,8 @@ public final class RuntimeCoordinator: Sendable {
                         deterministicActions: deterministicActions,
                         toolResults: toolResults,
                         rounds: providerCalls.count,
-                        outcome: .completedDeterministic
+                        outcome: .completedDeterministic,
+                        contextTokens: contextTokens,
                     )
                 }
                 if Self.taskProgressFingerprint(after) == roundFingerprint {
@@ -281,10 +424,50 @@ public final class RuntimeCoordinator: Sendable {
                 // Defensive narrowing: the provider only ever sees the
                 // runtime-selected tool subset for this exact step.
                 let stepTools = request.allowedTools.intersection(allowed)
+                let computationRequest = await makeComputationRequest(
+                    snapshot: roundStart,
+                    requirement: request.reason,
+                    intent: .reasoning,
+                    target: request.target,
+                    precision: .reasoned
+                )
+                var computationDecision = await computationRouter.route(
+                    computationRequest
+                )
+                if computationDecision.strategy != .contextAndModel {
+                    computationDecision = await computationRouter.escalate(
+                        computationRequest,
+                        from: computationDecision,
+                        result: ComputationResult(
+                            status: .unsupported, output: "",
+                            candidateCount: 0, evidenceSufficient: false,
+                            modelAvoided: false
+                        )
+                    )
+                }
+                guard computationDecision.strategy == .contextAndModel else {
+                    break roundLoop
+                }
+                // v0.31: selection responsibility moves to ContextEngine.
+                // The provider receives the prepared bundle serialization —
+                // never raw workspace access.
+                let prompt: String
+                if contextEngine != nil {
+                    let bundle = await freshContextBundle(
+                        input: input,
+                        request: request,
+                        taskID: Self.taskID(of: roundStart),
+                        evidence: evidence
+                    )
+                    contextTokens += bundle.estimatedTokens
+                    prompt = nextPrompt + "\n\n" + bundle.serialize()
+                } else {
+                    prompt = nextPrompt
+                }
                 let modelRequest = ModelRequest(
                     purpose: .intelligence(request.kind),
                     instructions: baseInstructions,
-                    prompt: nextPrompt,
+                    prompt: prompt,
                     tools: executor.providerToolSpecs(named: stepTools),
                     maxTokens: input.agentMaxTokens
                 )
@@ -292,6 +475,17 @@ public final class RuntimeCoordinator: Sendable {
                 // Exactly ONE physical generation per loop iteration.
                 let response = try await provider.generate(modelRequest)
                 providerCalls.append(response.telemetry)
+                await computationRouter.record(
+                    computationRequest,
+                    decision: computationDecision,
+                    result: ComputationResult(
+                        status: .success, output: response.text,
+                        candidateCount: response.toolCalls.count,
+                        evidenceSufficient: !response.toolCalls.isEmpty,
+                        modelAvoided: false
+                    ),
+                    durationMs: response.telemetry.durationSeconds * 1000
+                )
                 await events.emit(.intelligenceFinished(
                     taskID: Self.taskID(of: roundStart),
                     provider: "\(response.telemetry.provider)",
@@ -307,11 +501,24 @@ public final class RuntimeCoordinator: Sendable {
                     evidence = Self.evidenceBlocks(executed)
                     var state = await executor.taskSnapshot()
 
+                    if Self.hasFailedToolResult(executed) {
+                        if state.validation.consecutiveToolFailures >= 3 {
+                            break roundLoop
+                        }
+                        nextPrompt = Self.recoverablePrompt(
+                            state: state, evidence: evidence
+                        )
+                        continue
+                    }
+
                     if !state.validation.lastToolFailed, !state.isComplete {
                         let followed = await executor.advanceProtocol(allowed: allowed)
                         deterministicActions += followed.count
                         evidence.append(contentsOf: Self.evidenceBlocks(followed))
                         state = await executor.taskSnapshot()
+                        if Self.hasFailedToolResult(followed) {
+                            break roundLoop
+                        }
                     }
 
                     if state.validation.lastToolFailed {
@@ -331,7 +538,8 @@ public final class RuntimeCoordinator: Sendable {
                                 baseInstructions: baseInstructions,
                                 providerCalls: &providerCalls,
                                 deterministicActions: deterministicActions,
-                                toolResults: toolResults
+                                toolResults: toolResults,
+                                contextTokens: contextTokens
                             )
                         }
                         await events.emit(.taskCompleted(taskID: Self.taskID(of: state)))
@@ -342,7 +550,8 @@ public final class RuntimeCoordinator: Sendable {
                             deterministicActions: deterministicActions,
                             toolResults: toolResults,
                             rounds: providerCalls.count,
-                            outcome: .completedDeterministic
+                            outcome: .completedDeterministic,
+                            contextTokens: contextTokens,
                         )
                     }
 
@@ -385,13 +594,17 @@ public final class RuntimeCoordinator: Sendable {
                         deterministicActions: deterministicActions,
                         toolResults: toolResults,
                         rounds: providerCalls.count,
-                        outcome: .completedSynthesis
+                        outcome: .completedSynthesis,
+                        contextTokens: contextTokens,
                     )
                 }
                 let followed = await executor.advanceProtocol(allowed: allowed)
                 deterministicActions += followed.count
                 evidence = Self.evidenceBlocks(followed)
                 var advanced = await executor.taskSnapshot()
+                if Self.hasFailedToolResult(followed) {
+                    break roundLoop
+                }
                 if advanced.validation.lastToolFailed {
                     nextPrompt = Self.recoverablePrompt(state: advanced, evidence: evidence)
                     continue
@@ -405,7 +618,8 @@ public final class RuntimeCoordinator: Sendable {
                             baseInstructions: baseInstructions,
                             providerCalls: &providerCalls,
                             deterministicActions: deterministicActions,
-                            toolResults: toolResults
+                            toolResults: toolResults,
+                            contextTokens: contextTokens
                         )
                     }
                     await events.emit(.taskCompleted(taskID: Self.taskID(of: advanced)))
@@ -416,7 +630,8 @@ public final class RuntimeCoordinator: Sendable {
                         deterministicActions: deterministicActions,
                         toolResults: toolResults,
                         rounds: providerCalls.count,
-                        outcome: .completedDeterministic
+                        outcome: .completedDeterministic,
+                        contextTokens: contextTokens,
                     )
                 }
                 if Self.taskProgressFingerprint(advanced) == roundFingerprint {
@@ -453,7 +668,8 @@ public final class RuntimeCoordinator: Sendable {
                 deterministicActions: deterministicActions,
                 toolResults: toolResults,
                 rounds: providerCalls.count,
-                outcome: .completedDeterministic
+                outcome: .completedDeterministic,
+                contextTokens: contextTokens,
             )
         }
         return RuntimeTaskResult(
@@ -463,7 +679,79 @@ public final class RuntimeCoordinator: Sendable {
             deterministicActions: deterministicActions,
             toolResults: toolResults,
             rounds: providerCalls.count,
-            outcome: .incomplete(final.incompleteReason)
+            outcome: .incomplete(final.incompleteReason),
+            contextTokens: contextTokens,
+        )
+    }
+
+    // MARK: Context bundle (v0.31 §5/§18)
+
+    /// Compiles a fresh bundle and re-verifies it right before the provider
+    /// call. A bundle that went stale mid-compile is rebuilt once (bounded);
+    /// stale code is never sent to the model.
+    private func freshContextBundle(
+        input: RuntimeTaskInput,
+        request: IntelligenceRequest,
+        taskID: String,
+        evidence: [String]
+    ) async -> ContextBundle {
+        guard let engine = contextEngine else {
+            fatalError("freshContextBundle requires a ContextEngine")
+        }
+        func build() async -> ContextBundle {
+            let snapshot = await executor.taskSnapshot()
+            let semanticTarget: (symbol: String, path: String?)? = snapshot
+                .missingRequirements.compactMap { requirement in
+                    if case .semanticRename(let symbol, _, let path) = requirement {
+                        return (symbol: symbol, path: path)
+                    }
+                    return nil
+                }.first
+            let query = ContextRequest(
+                taskID: taskID,
+                userText: input.userText,
+                specSummary: snapshot.spec.map { "\($0)" } ?? "no active spec",
+                requirement: "\(request)",
+                purpose: ContextPurpose(request.kind),
+                targetPath: snapshot.resolvedTargetPath
+                    ?? semanticTarget?.path ?? request.target,
+                targetSymbol: semanticTarget?.symbol,
+                budget: input.contextBudget ?? .default,
+                pinned: nil,
+                recentFailure: snapshot.validation.lastFailure,
+                maxLevel: request.kind == .diagnoseAndEdit ? .l3 : .l2,
+                recentEvidence: Array(evidence.suffix(4)),
+                conversation: input.sessionExcerpt,
+                projectInstructions: projectInstructions.isEmpty
+                    ? input.projectInstructions : projectInstructions,
+                maxTokensHint: input.agentMaxTokens
+            )
+            let (bundle, _) = await engine.compile(query)
+            return bundle
+        }
+        let first = await build()
+        if engine.isFresh(first) {
+            return first
+        }
+        return await build()
+    }
+
+    private func makeComputationRequest(
+        snapshot: TaskRuntimeSnapshot,
+        requirement: String,
+        intent: ComputationOperationIntent,
+        target: String?,
+        precision: ComputationPrecisionClass
+    ) async -> ComputationRequest {
+        ComputationRequest(
+            taskID: Self.taskID(of: snapshot),
+            requirement: requirement,
+            intent: intent,
+            target: target,
+            workspaceEpoch: await executor.computationEpoch(),
+            revisions: snapshot.artifactRevisions,
+            requiredPrecision: precision,
+            requiredConfidence: snapshot.spec?.compileConfidence ?? 1
         )
     }
 
@@ -476,14 +764,55 @@ public final class RuntimeCoordinator: Sendable {
         baseInstructions: String,
         providerCalls: inout [ProviderCallTelemetry],
         deterministicActions: Int,
-        toolResults: Int
+        toolResults: Int,
+        contextTokens: Int
     ) async throws -> RuntimeTaskResult {
         let snapshot = await executor.taskSnapshot()
         let taskID = Self.taskID(of: snapshot)
+        let computationRequest = await makeComputationRequest(
+            snapshot: snapshot,
+            requirement: snapshot.incompleteReason,
+            intent: .reasoning,
+            target: snapshot.resolvedTargetPath,
+            precision: .reasoned
+        )
+        let computationDecision = await computationRouter.route(computationRequest)
+        guard computationDecision.strategy == .contextAndModel else {
+            throw CLIError("computation router did not authorize synthesis model use")
+        }
+        var servedContextTokens = contextTokens
+        var prompt = Self.synthesisPrompt(
+            originalRequest: input.userText, evidence: evidence
+        )
+        if let engine = contextEngine {
+            let contextRequest = ContextRequest(
+                taskID: taskID,
+                userText: input.userText,
+                specSummary: snapshot.spec.map { "\($0)" } ?? "no active spec",
+                requirement: "synthesize verified result",
+                purpose: .synthesize,
+                targetPath: snapshot.resolvedTargetPath,
+                targetSymbol: nil,
+                budget: input.contextBudget ?? .default,
+                pinned: nil,
+                recentFailure: snapshot.validation.lastFailure,
+                maxLevel: .l2,
+                recentEvidence: Array(evidence.suffix(4)),
+                conversation: input.sessionExcerpt,
+                projectInstructions: projectInstructions.isEmpty
+                    ? input.projectInstructions : projectInstructions,
+                maxTokensHint: input.agentMaxTokens
+            )
+            let (bundle, _) = await engine.compile(contextRequest)
+            if engine.isFresh(bundle) {
+                servedContextTokens += bundle.estimatedTokens
+                prompt += "\n\n" + bundle.serialize()
+            }
+        }
         let request = ModelRequest(
             purpose: .synthesis,
             instructions: baseInstructions,
-            prompt: Self.synthesisPrompt(originalRequest: input.userText, evidence: evidence),
+            prompt: prompt,
             tools: [],
             maxTokens: input.agentMaxTokens
         )
@@ -493,6 +822,16 @@ public final class RuntimeCoordinator: Sendable {
         do {
             let response = try await provider.generate(request)
             providerCalls.append(response.telemetry)
+            await computationRouter.record(
+                computationRequest,
+                decision: computationDecision,
+                result: ComputationResult(
+                    status: .success, output: response.text,
+                    candidateCount: 0, evidenceSufficient: true,
+                    modelAvoided: false
+                ),
+                durationMs: response.telemetry.durationSeconds * 1000
+            )
             await events.emit(.intelligenceFinished(
                 taskID: taskID,
                 provider: "\(response.telemetry.provider)",
@@ -510,7 +849,8 @@ public final class RuntimeCoordinator: Sendable {
                 deterministicActions: deterministicActions,
                 toolResults: toolResults,
                 rounds: providerCalls.count,
-                outcome: .completedSynthesis
+                outcome: .completedSynthesis,
+                contextTokens: servedContextTokens,
             )
         } catch {
             await events.emit(.warning("synthesis generation failed: \(error.localizedDescription)"))
@@ -573,6 +913,18 @@ public final class RuntimeCoordinator: Sendable {
         Incomplete tail:
         \(String(tail.suffix(2_000)))
         """
+    }
+
+    static func hasFailedToolResult(
+        _ results: [(name: String, result: String)]
+    ) -> Bool {
+        results.contains { $0.result.contains(#""ok":false"#) }
+    }
+
+    static func milliseconds(_ duration: Duration) -> Double {
+        let components = duration.components
+        return (Double(components.seconds) +
+            Double(components.attoseconds) / 1e18) * 1000
     }
 
     static func intelligencePrompt(

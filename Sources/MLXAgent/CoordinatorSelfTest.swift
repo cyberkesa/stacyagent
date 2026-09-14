@@ -15,6 +15,8 @@ final class ScriptExecutor: RuntimeToolExecutor, @unchecked Sendable {
     let state = RuntimeState()
     /// Tool names that fail recoverably exactly once (then succeed).
     var failOnce: Set<String> = []
+    /// Tool names that deliberately return success without changing runtime state.
+    var noProgress: Set<String> = []
 
     func begin(_ spec: TaskSpec) async {
         await state.beginTask(spec)
@@ -26,14 +28,19 @@ final class ScriptExecutor: RuntimeToolExecutor, @unchecked Sendable {
 
     func advanceProtocol(allowed: Set<String>) async -> [(name: String, result: String)] {
         var output: [(name: String, result: String)] = []
+        var attempted = Set<String>()
         for _ in 0..<8 {
             let before = await state.taskSnapshot()
             guard case .deterministic(let action) = ProtocolEngine.decision(
                 for: before,
                 allowed: allowed
             ) else { break }
+            let key = action.description + "|" +
+                RuntimeCoordinator.taskProgressFingerprint(before)
+            guard attempted.insert(key).inserted else { break }
             let result = await executeNormalized(action.normalizedInvocation, allowed: allowed)
             output.append((name: action.toolName, result: result))
+            if result.contains(#""ok":false"#) { break }
             let after = await state.taskSnapshot()
             if after.isComplete || after.validation.lastToolFailed { break }
         }
@@ -46,6 +53,9 @@ final class ScriptExecutor: RuntimeToolExecutor, @unchecked Sendable {
     ) async -> String {
         let name = invocation.name
         let args = invocation.arguments
+        if noProgress.contains(name) {
+            return "ok without state change"
+        }
         if failOnce.contains(name) {
             failOnce.remove(name)
             await state.recoverableFailure(name, message: "unique edit target not found (scripted)")

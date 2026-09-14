@@ -240,6 +240,7 @@ final class AgentLoop: @unchecked Sendable {
             }
         }
         stats.passes = result.physicalGenerations
+        stats.contextTokens = result.contextTokens
         stats.tools = await registry.state.tools()
         stats.toolSeconds = await registry.state.toolSeconds()
 

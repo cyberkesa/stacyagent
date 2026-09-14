@@ -44,6 +44,19 @@ enum AgentEvent: Sendable {
     case semanticEditPlanned(taskID: String, files: [String], edits: Int)
     case semanticEditApplied(taskID: String, files: [String])
     case semanticAmbiguityDetected(symbol: String, candidates: [String])
+
+    // --- v0.31 context engine stream ---
+    case contextCompilationStarted(taskID: String, purpose: String)
+    case contextCompilationFinished(taskID: String, durationMs: Double, itemCount: Int, estimatedTokens: Int, cacheHit: Bool, levelsReached: Int)
+    case contextItemAdded(taskID: String, itemID: String, kind: String)
+    case contextItemDropped(taskID: String, itemID: String, reason: String)
+    case contextBundleInvalidated(path: String)
+
+    // --- v0.31.5 computation router stream ---
+    case computationRequested(taskID: String, intent: String)
+    case computationRouted(taskID: String, strategy: String, latencyClass: String, modelCalls: Int, cacheHit: Bool)
+    case computationFinished(taskID: String, strategy: String, durationMs: Double, candidateCount: Int, cacheHit: Bool, modelAvoided: Bool)
+    case computationEscalated(taskID: String, from: String, to: String, reason: String)
 }
 
 protocol AgentEventSink: Sendable {

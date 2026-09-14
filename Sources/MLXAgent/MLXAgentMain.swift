@@ -65,7 +65,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 await self.vm.emit(.modelLoading)
 
                 let events = EventBus(sink: self.vm)
-                let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime)
+                // v0.31: one shared code intelligence engine (fact store +
+                // lazy LSP backend) feeds both the semantic tool and the
+                // ContextEngine; a single sourcekit process per project.
+                var codeProviders: [any CodeIntelligenceProvider] = []
+                if let lsp = LSPCodeIntelligenceProvider(projectRoot: options.projectURL) {
+                    codeProviders.append(lsp)
+                }
+                let codeIntel = CodeIntelligenceEngine(
+                    workspace: workspace, providers: codeProviders, events: events
+                )
+                let computationRouter = ComputationRouter(events: events)
+                let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime, codeIntelligence: codeIntel, computationRouter: computationRouter)
                 // v0.29: restore revision-aware runtime truth (graph + evidence).
                 _ = await registry.restoreRuntime()
                 // v0.28 boundary: Workspace/MCP/ToolRegistry -> MLXProvider ->
@@ -83,7 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let coordinator = RuntimeCoordinator(
                     executor: registry,
                     events: events,
-                    projectInstructions: ProjectInstructions.load(root: options.projectURL)
+                    projectInstructions: ProjectInstructions.load(root: options.projectURL),
+                    contextEngine: ContextEngine(
+                        workspace: workspace, codeIntel: codeIntel, events: events
+                    ),
+                    computationRouter: computationRouter
                 )
                 let agent = AgentLoop(
                     mlx: provider,
@@ -122,7 +137,16 @@ func runCLIMode() {
             let runtime = RuntimeEnvironment.probe(projectURL: options.projectURL)
             let workspace = Workspace(root: options.projectURL, shellTimeoutSeconds: options.shellTimeoutSeconds, policy: policy, runtime: runtime)
             let mcp = MCPBridge(policy: policy)
-            let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime)
+            // v0.31: shared code intelligence (see GUI wiring above).
+            var codeProviders: [any CodeIntelligenceProvider] = []
+            if let lsp = LSPCodeIntelligenceProvider(projectRoot: options.projectURL) {
+                codeProviders.append(lsp)
+            }
+            let codeIntel = CodeIntelligenceEngine(
+                workspace: workspace, providers: codeProviders, events: events
+            )
+            let computationRouter = ComputationRouter(events: events)
+            let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime, codeIntelligence: codeIntel, computationRouter: computationRouter)
             // v0.29: restore revision-aware runtime truth (graph + evidence).
             _ = await registry.restoreRuntime()
             // v0.28 boundary (same as GUI wiring above).
@@ -138,7 +162,11 @@ func runCLIMode() {
             let coordinator = RuntimeCoordinator(
                 executor: registry,
                 events: events,
-                projectInstructions: ProjectInstructions.load(root: options.projectURL)
+                projectInstructions: ProjectInstructions.load(root: options.projectURL),
+                contextEngine: ContextEngine(
+                    workspace: workspace, codeIntel: codeIntel, events: events
+                ),
+                computationRouter: computationRouter
             )
             let agent = AgentLoop(
                 mlx: provider,

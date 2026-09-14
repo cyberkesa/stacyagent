@@ -510,6 +510,60 @@ final class CodeIntelligenceEngine: @unchecked Sendable {
 
     // MARK: - Diagnostics as facts (never evidence, never authority)
 
+    /// Definition locations for an exact snapshot offset, rebound to current
+    /// snapshots and exact UTF-8 spans before they leave the engine.
+    func definition(
+        snapshot: CodeDocumentSnapshot, offset: Int
+    ) async -> [CodeLocation]? {
+        for provider in providers where provider.capabilities.definition {
+            if case .locations(let locs) = try? await provider.query(
+                .definition(snapshot, byteOffset: offset)
+            ) {
+                return bindLocations(locs)
+            }
+        }
+        return nil
+    }
+
+    /// Reference locations for an exact snapshot offset, rebound to current
+    /// snapshots and exact UTF-8 spans.
+    func references(
+        snapshot: CodeDocumentSnapshot, offset: Int
+    ) async -> [CodeLocation]? {
+        for provider in providers where provider.capabilities.references {
+            if case .locations(let locs) = try? await provider.query(
+                .references(snapshot, byteOffset: offset)
+            ) {
+                return bindLocations(locs)
+            }
+        }
+        return nil
+    }
+
+    private func bindLocations(_ unresolved: [UnresolvedLocation]) -> [CodeLocation] {
+        unresolved.compactMap { item in
+            guard let startLine = item.startLine,
+                  let startCharacter = item.startCharacter,
+                  let endLine = item.endLine,
+                  let endCharacter = item.endCharacter,
+                  let snapshot = try? snapshot(path: item.path),
+                  let start = UTF8SpanConverter.byteOffset(
+                    content: snapshot.content, line: startLine,
+                    character: startCharacter, encoding: item.encoding
+                  ),
+                  let end = UTF8SpanConverter.byteOffset(
+                    content: snapshot.content, line: endLine,
+                    character: endCharacter, encoding: item.encoding
+                  ), start <= end else {
+                return nil
+            }
+            let span = CodeSpan(
+                revision: snapshot.revision, startByte: start, endByte: end
+            )
+            return CodeLocation(path: snapshot.path, revision: snapshot.revision, span: span)
+        }
+    }
+
     func diagnostics(path: String) async -> [DiagnosticFact] {
         do {
             let snap = try snapshot(path: path)

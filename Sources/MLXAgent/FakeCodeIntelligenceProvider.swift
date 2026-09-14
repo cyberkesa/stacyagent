@@ -44,6 +44,7 @@ final class FakeCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked S
     private var referenceTable: [String: [FakeRefDef]] = [:]
     private var diagnostics: [String: [DiagnosticFact]] = [:]
     private(set) var queryCount = 0
+    private(set) var renameQueryCount = 0
 
     init(
         id: String = "fake-codeintel",
@@ -81,12 +82,11 @@ final class FakeCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked S
         lock.withLock { contents[path] }
     }
 
-    /// Diagnostics bound to the requested revision (test-controlled).
+    /// Diagnostics with their scripted revisions preserved verbatim:
+    /// staleness is decided by the engine, never by the provider.
     func diagnosticsFor(path: String, revision: ArtifactRevisionID) -> [DiagnosticFact] {
-        lock.withLock { diagnostics[path] ?? [] }.map { item in
-            DiagnosticFact(path: item.path, revision: revision,
-                           message: item.message, severity: item.severity)
-        }
+        _ = revision
+        return lock.withLock { diagnostics[path] ?? [] }
     }
 
     func query(_ query: SemanticQuery) async throws -> SemanticQueryResult {
@@ -174,23 +174,30 @@ final class FakeCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked S
             }
             return .locations(out)
 
-        case .references:
+        case .references(let snapshot, let byteOffset):
             // Scripted reference table (models an index over usages).
             // Explicitly unresolved: coordinates preserved, no revision
             // claimed. The engine snapshots and binds before any use.
             var refsOut: [UnresolvedLocation] = []
-            let tables = lock.withLock { referenceTable }
-            for (_, refs) in tables {
-                for ref in refs {
-                    guard content(for: ref.path) != nil else {
-                        continue
-                    }
-                    refsOut.append(UnresolvedLocation(
-                        path: ref.path,
-                        startLine: ref.line, startCharacter: ref.utf16Start,
-                        endLine: ref.line, endCharacter: ref.utf16End
-                    ))
-                }
+            let target = lock.withLock { symbols }.first { def in
+                guard def.path == snapshot.path,
+                      let start = UTF8SpanConverter.byteOffset(
+                        content: snapshot.content, line: def.line,
+                        character: def.utf16Start, encoding: .utf16
+                      ),
+                      let end = UTF8SpanConverter.byteOffset(
+                        content: snapshot.content, line: def.line,
+                        character: def.utf16End, encoding: .utf16
+                      ) else { return false }
+                return start <= byteOffset && byteOffset <= end
+            }
+            for ref in lock.withLock({ target.flatMap { referenceTable[$0.name] } ?? [] }) {
+                guard content(for: ref.path) != nil else { continue }
+                refsOut.append(UnresolvedLocation(
+                    path: ref.path,
+                    startLine: ref.line, startCharacter: ref.utf16Start,
+                    endLine: ref.line, endCharacter: ref.utf16End
+                ))
             }
             return .locations(refsOut)
 
@@ -222,6 +229,7 @@ final class FakeCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked S
             return .renameRange(nil)
 
         case .rename(let snapshot, let byteOffset, let newName, let context):
+            lock.withLock { renameQueryCount += 1 }
             // Cross-file bases come ONLY from engine-supplied snapshots
             // (target + context). A file the engine never snapshotted is
             // stale by construction: refuse instead of guessing.

@@ -853,6 +853,64 @@ final class Workspace: @unchecked Sendable {
         return result
     }
 
+    func literalSearch(_ query: String, path: String) throws -> String {
+        try policy.authorize(tool: "search", risk: .read)
+        let base = try resolve(path)
+        let cacheKey = base.path + "\u{1F}literal\u{1F}" + query
+        if let cached = taskCache.cachedSearch(cacheKey) {
+            return cached
+        }
+
+        let result: String
+        if let rg = runtime.executables["rg"] {
+            let relativeBase = relative(base)
+            let arguments = [
+                "-n", "--no-heading", "--color", "never", "--fixed-strings",
+                "--smart-case", "--max-count", String(limits.searchMaxHits),
+                "--glob", "!.git/**", "--glob", "!node_modules/**",
+                "--glob", "!DerivedData/**", "--glob", "!.build/**",
+                "--glob", "!dist/**", query,
+                relativeBase.isEmpty ? "." : relativeBase
+            ]
+            let runResult = try run(
+                rg, arguments, limits.searchTimeoutSeconds, allow: [1]
+            )
+            result = runResult.status == 1 ? "no matches" : runResult.output
+        } else {
+            var hits: [String] = []
+            let keys: Set<URLResourceKey> = [
+                .isRegularFileKey, .isDirectoryKey, .fileSizeKey
+            ]
+            guard let enumerator = fm.enumerator(
+                at: base, includingPropertiesForKeys: Array(keys),
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { return "no matches" }
+            outer: for case let url as URL in enumerator {
+                if Self.ignored.contains(url.lastPathComponent) {
+                    enumerator.skipDescendants()
+                    continue
+                }
+                let values = try? url.resourceValues(forKeys: keys)
+                guard values?.isRegularFile == true,
+                      (values?.fileSize ?? 0) < limits.searchFallbackMaxBytes,
+                      let text = try? String(contentsOf: url, encoding: .utf8) else {
+                    continue
+                }
+                for (lineNumber, line) in text.split(
+                    separator: "\n", omittingEmptySubsequences: false
+                ).enumerated() where line.localizedCaseInsensitiveContains(query) {
+                    hits.append("\(relative(url)):\(lineNumber + 1):\(line)")
+                    if hits.count >= limits.searchMaxHits { break outer }
+                }
+            }
+            result = hits.isEmpty
+                ? "no matches"
+                : String(hits.joined(separator: "\n").prefix(limits.searchOutputMaxChars))
+        }
+        taskCache.storeSearch(cacheKey, result: result)
+        return result
+    }
+
     func shell(_ command: String) throws -> String {
         try policy.authorize(tool: "shell", risk: .shell)
         try policy.validateShell(command)

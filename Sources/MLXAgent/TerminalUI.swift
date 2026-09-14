@@ -156,6 +156,24 @@ actor TerminalRenderer: AgentEventSink {
             print("  " + TerminalStyle.dim("· semantic applied \(files.joined(separator: ", "))"))
         case .semanticAmbiguityDetected(let symbol, let candidates):
             print("  " + TerminalStyle.yellow("! ") + TerminalStyle.dim("ambiguous \(symbol): \(candidates.joined(separator: ", "))"))
+        case .contextCompilationStarted(let taskID, let purpose):
+            print("  " + TerminalStyle.dim("· context \(taskID) \(purpose)…"))
+        case .contextCompilationFinished(_, let ms, let count, let tokens, let hit, _):
+            print("  " + TerminalStyle.dim(String(format: "· context %d items ~%dtok %.0fms %@", count, tokens, ms, hit ? "cached" : "fresh")))
+        case .contextItemAdded(_, let itemID, let kind):
+            print("  " + TerminalStyle.dim("· +\(kind) \(itemID)"))
+        case .contextItemDropped(_, let itemID, let reason):
+            print("  " + TerminalStyle.dim("· -\(itemID) \(reason)"))
+        case .contextBundleInvalidated(let path):
+            print("  " + TerminalStyle.dim("· context invalidated \(path)"))
+        case .computationRequested(_, let intent):
+            print("  " + TerminalStyle.dim("· computation requested \(intent)"))
+        case .computationRouted(_, let strategy, let latency, let calls, let hit):
+            print("  " + TerminalStyle.dim("· computation → \(strategy) \(latency) model=\(calls) \(hit ? "cached" : "fresh")"))
+        case .computationFinished(_, let strategy, let ms, let count, let hit, let avoided):
+            print("  " + TerminalStyle.dim(String(format: "· computation %@ %.0fms candidates=%d %@ model-avoided=%@", strategy, ms, count, hit ? "cached" : "fresh", avoided ? "true" : "false")))
+        case .computationEscalated(_, let from, let to, let reason):
+            print("  " + TerminalStyle.dim("· computation \(from) → \(to): \(reason)"))
         }
     }
 

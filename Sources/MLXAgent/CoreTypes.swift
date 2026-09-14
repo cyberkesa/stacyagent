@@ -172,6 +172,8 @@ struct GenerationStats: Sendable {
     var routerSeconds: Double = 0
     var promptTokensPerSecond: Double?
     var generationTokensPerSecond: Double?
+    /// v0.31 estimated context tokens served to model calls.
+    var contextTokens: Int = 0
     var routeSource: RouteSource?
     var taskStatus: String?
     private var finishedElapsed: Duration?

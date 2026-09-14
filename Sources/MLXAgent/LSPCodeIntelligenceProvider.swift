@@ -227,7 +227,7 @@ actor LSPConnection {
             do {
                 try await Task.sleep(for: .seconds(timeout))
                 guard !Task.isCancelled else { return }
-                await self.settle(id: id, with: .failure(LSPError.timeout(method)))
+                self.settle(id: id, with: .failure(LSPError.timeout(method)))
             } catch {}
         }
     }
@@ -374,7 +374,7 @@ final class LSPCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked Se
         return connection
     }
 
-    private func bootInner(_ connection: LSPConnection) async throws -> LSPConnection {
+    private func bootInner(_ connection: LSPConnection) async throws {
         try await connection.start(executable: executable, workingDirectory: root)
         let rawInit = try await connection.request(method: "initialize", params: [
             "processId": ProcessInfo.processInfo.processIdentifier,
@@ -393,7 +393,6 @@ final class LSPCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked Se
         }
         try await connection.notify(method: "initialized", params: [:])
         lock.withLock { self.connection = connection }
-        return connection
     }
 
     private func connectionIfStarted() -> LSPConnection? {
@@ -479,7 +478,7 @@ final class LSPCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked Se
                 "position": ["line": position.line, "character": position.character]
             ])
             return .locations(Self.convertPendingLocations(
-                lspResult(rawDef), root: root
+                lspResult(rawDef), root: root, encoding: initializedEncoding
             ))
 
         case .references(let snapshot, let byteOffset):
@@ -490,7 +489,7 @@ final class LSPCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked Se
                 "context": ["includeDeclaration": true]
             ])
             return .locations(Self.convertPendingLocations(
-                lspResult(rawRefs), root: root
+                lspResult(rawRefs), root: root, encoding: initializedEncoding
             ))
 
         case .prepareRename(let snapshot, let byteOffset):
@@ -673,7 +672,8 @@ final class LSPCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked Se
 
     static func convertPendingLocations(
         _ node: Any?,
-        root: URL
+        root: URL,
+        encoding: LSPPositionEncoding
     ) -> [UnresolvedLocation] {
         // Reference/definition hits carry URIs (+ ranges) but no snapshot
         // basis. Ranges are preserved verbatim; revisions are bound later
@@ -706,7 +706,8 @@ final class LSPCodeIntelligenceProvider: CodeIntelligenceProvider, @unchecked Se
                 startLine: start.flatMap { ints($0, "line") },
                 startCharacter: start.flatMap { ints($0, "character") },
                 endLine: end.flatMap { ints($0, "line") },
-                endCharacter: end.flatMap { ints($0, "character") }
+                endCharacter: end.flatMap { ints($0, "character") },
+                encoding: encoding
             ))
         }
         if let array = node as? [[String: Any]] {
