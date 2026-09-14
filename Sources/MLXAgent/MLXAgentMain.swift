@@ -1,11 +1,31 @@
 import Foundation
 import AppKit
 import SwiftUI
+import SLTAIPC
 
 @main
 @MainActor
 struct MLXAgentMain {
     static func main() {
+        if CommandLine.arguments.contains("--ipc-integration") {
+            let completion = DispatchSemaphore(value: 0)
+            Task.detached {
+                let results = await IPCIntegrationSelfTest.runAll()
+                let failed = results.filter { !$0.passed }
+                if failed.isEmpty {
+                    print("SLTA IPC integration: PASS \(results.count)/\(results.count)")
+                } else {
+                    print("SLTA IPC integration: FAIL \(results.count - failed.count)/\(results.count) · " + failed.map(\.name).joined(separator: "; "))
+                }
+                completion.signal()
+            }
+            completion.wait()
+            return
+        }
+        if CommandLine.arguments.contains("--runtime-service") {
+            runRuntimeServiceMode()
+            return
+        }
         if CommandLine.arguments.contains("--selftest") {
             let completion = DispatchSemaphore(value: 0)
             Task.detached {
@@ -53,66 +73,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         NSApp.activate(ignoringOtherApps: true)
 
-        // Запуск модели и MCP в фоне — окно открывается мгновенно, без подвисаний!
+        // GUI is an IPC client. Model, LSP and project truth stay in slta-runtime.
         Task.detached {
             do {
                 let options = try AgentOptions.parse(CommandLine.arguments)
-                let policy = PolicyEngine(mode: options.approvalMode, allowMCP: options.allowMCP)
-                let runtime = RuntimeEnvironment.probe(projectURL: options.projectURL)
-                let workspace = Workspace(root: options.projectURL, shellTimeoutSeconds: options.shellTimeoutSeconds, policy: policy, runtime: runtime)
-                let mcp = MCPBridge(policy: policy)
-
                 await self.vm.emit(.modelLoading)
-
-                let events = EventBus(sink: self.vm)
-                // v0.31: one shared code intelligence engine (fact store +
-                // lazy LSP backend) feeds both the semantic tool and the
-                // ContextEngine; a single sourcekit process per project.
-                var codeProviders: [any CodeIntelligenceProvider] = []
-                if let lsp = LSPCodeIntelligenceProvider(projectRoot: options.projectURL) {
-                    codeProviders.append(lsp)
+                try await RuntimeProcess.ensureRunning(options: options)
+                let client = RuntimeClient(workspaceURL: options.projectURL) { [weak vm = self.vm] event in
+                    Task { await vm?.consume(event) }
                 }
-                let codeIntel = CodeIntelligenceEngine(
-                    workspace: workspace, providers: codeProviders, events: events
-                )
-                let computationRouter = ComputationRouter(events: events)
-                let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime, codeIntelligence: codeIntel, computationRouter: computationRouter)
-                // v0.29: restore revision-aware runtime truth (graph + evidence).
-                _ = await registry.restoreRuntime()
-                // v0.28 boundary: Workspace/MCP/ToolRegistry -> MLXProvider ->
-                // RuntimeCoordinator -> AgentLoop. The runtime never depends
-                // on the model adapter.
-                let provider = try await MLXProvider(
-                    modelID: options.modelID,
-                    draftModelID: options.draftModelID,
-                    events: events,
-                    chatMaxTokens: options.chatMaxTokens,
-                    agentMaxTokens: options.agentMaxTokens,
-                    timeoutSeconds: options.generationTimeoutSeconds,
-                    controllerTimeoutSeconds: options.controllerTimeoutSeconds
-                )
-                let coordinator = RuntimeCoordinator(
-                    executor: registry,
-                    events: events,
-                    projectInstructions: ProjectInstructions.load(root: options.projectURL),
-                    contextEngine: ContextEngine(
-                        workspace: workspace, codeIntel: codeIntel, events: events
-                    ),
-                    computationRouter: computationRouter
-                )
-                let agent = AgentLoop(
-                    mlx: provider,
-                    coordinator: coordinator,
-                    registry: registry,
-                    events: events,
-                    maxRounds: options.maxRounds,
-                    chatMaxTokens: options.chatMaxTokens,
-                    agentMaxTokens: options.agentMaxTokens
-                )
-
-                await MainActor.run {
-                    self.vm.bind(agent: agent, mcp: mcp)
-                }
+                try await client.connect(clientName: "slta-gui")
+                let snapshot = try await client.openWorkspace()
+                await self.vm.bind(client: client, snapshot: snapshot)
             } catch {
                 await MainActor.run {
                     self.vm.loadingStatus = "Ошибка загрузки: \(error.localizedDescription)"
@@ -132,51 +104,14 @@ func runCLIMode() {
         do {
             let options = try AgentOptions.parse(CommandLine.arguments)
             let renderer = TerminalRenderer()
-            let events = EventBus(sink: renderer)
-            let policy = PolicyEngine(mode: options.approvalMode, allowMCP: options.allowMCP)
-            let runtime = RuntimeEnvironment.probe(projectURL: options.projectURL)
-            let workspace = Workspace(root: options.projectURL, shellTimeoutSeconds: options.shellTimeoutSeconds, policy: policy, runtime: runtime)
-            let mcp = MCPBridge(policy: policy)
-            // v0.31: shared code intelligence (see GUI wiring above).
-            var codeProviders: [any CodeIntelligenceProvider] = []
-            if let lsp = LSPCodeIntelligenceProvider(projectRoot: options.projectURL) {
-                codeProviders.append(lsp)
+            try await RuntimeProcess.ensureRunning(options: options)
+            let client = RuntimeClient(workspaceURL: options.projectURL) { event in
+                if let translated = IPCEventAdapter.agentEvent(event) {
+                    Task { await renderer.emit(translated) }
+                }
             }
-            let codeIntel = CodeIntelligenceEngine(
-                workspace: workspace, providers: codeProviders, events: events
-            )
-            let computationRouter = ComputationRouter(events: events)
-            let registry = ToolRegistry(workspace: workspace, mcp: mcp, events: events, runtime: runtime, codeIntelligence: codeIntel, computationRouter: computationRouter)
-            // v0.29: restore revision-aware runtime truth (graph + evidence).
-            _ = await registry.restoreRuntime()
-            // v0.28 boundary (same as GUI wiring above).
-            let provider = try await MLXProvider(
-                modelID: options.modelID,
-                draftModelID: options.draftModelID,
-                events: events,
-                chatMaxTokens: options.chatMaxTokens,
-                agentMaxTokens: options.agentMaxTokens,
-                timeoutSeconds: options.generationTimeoutSeconds,
-                controllerTimeoutSeconds: options.controllerTimeoutSeconds
-            )
-            let coordinator = RuntimeCoordinator(
-                executor: registry,
-                events: events,
-                projectInstructions: ProjectInstructions.load(root: options.projectURL),
-                contextEngine: ContextEngine(
-                    workspace: workspace, codeIntel: codeIntel, events: events
-                ),
-                computationRouter: computationRouter
-            )
-            let agent = AgentLoop(
-                mlx: provider,
-                coordinator: coordinator,
-                registry: registry,
-                events: events,
-                maxRounds: options.maxRounds,
-                chatMaxTokens: options.chatMaxTokens,
-                agentMaxTokens: options.agentMaxTokens
-            )
+            try await client.connect(clientName: "slta-cli")
+            _ = try await client.openWorkspace()
 
             TerminalRenderer.banner(
                 model: options.modelID,
@@ -192,15 +127,15 @@ func runCLIMode() {
 
                 switch text {
                 case "/exit", "/quit":
+                    client.close()
                     semaphore.signal()
                     return
                 case "/clear":
-                    await agent.clear()
-                    print("  " + TerminalStyle.green("✓") + TerminalStyle.dim(" context cleared\n"))
+                    print("  " + TerminalStyle.green("✓") + TerminalStyle.dim(" local display cleared; runtime state preserved\n"))
                 case "/mcp":
-                    print("  " + TerminalStyle.dim(mcp.listServers() + "\n"))
+                    print("  " + TerminalStyle.dim("MCP is owned by slta-runtime\n"))
                 default:
-                    try await agent.run(text)
+                    _ = try await client.submit(text)
                     print("")
                 }
             }

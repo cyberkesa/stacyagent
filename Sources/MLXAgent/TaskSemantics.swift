@@ -1172,7 +1172,7 @@ enum TaskCompiler {
             }
         }
 
-        if decision.mode == .inspect ||
+        if (decision.mode == .inspect && !discourse.explainRequest) ||
            (decision.mode == .agent && discourse.inspectionRequest) {
             kinds.insert(.inspect)
             desired.insert(.observed)

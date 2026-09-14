@@ -2,6 +2,7 @@ import Foundation
 import SwiftUI
 import AppKit
 import Textual
+import SLTAIPC
 
 // MARK: - Color Palette
 enum StacyTheme {
@@ -156,14 +157,28 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
     @Published var liveThinkingSeconds: Double = 0
     @Published var liveThinkingTokens: Int = 0
 
-    private var agent: AgentLoop?
+    private var client: RuntimeClient?
+    private var activeRuntimeTaskID: String?
     private var taskHandle: Task<Void, Never>?
 
-    func bind(agent: AgentLoop, mcp: MCPBridge) {
-        self.agent = agent
-        self.serverNames = mcp.serverNames
+    func bind(client: RuntimeClient, snapshot: RuntimeSnapshot?) {
+        self.client = client
+        self.activeRuntimeTaskID = snapshot?.activeTaskID
+        if snapshot?.runtimeStatus == "busy" {
+            self.activeTask = snapshot?.recentTaskSummary ?? "Runtime task"
+            self.isRunning = true
+        }
         self.isModelLoading = false
         self.loadingStatus = "Готова к магии ✨"
+    }
+
+    nonisolated func consume(_ event: RuntimeEvent) async {
+        await MainActor.run {
+            self.activeRuntimeTaskID = event.taskID ?? self.activeRuntimeTaskID
+        }
+        if let translated = IPCEventAdapter.agentEvent(event) {
+            await emit(translated)
+        }
     }
 
     nonisolated func emit(_ event: AgentEvent) async {
@@ -273,7 +288,7 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
 
     func send() {
         let text = inputText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !text.isEmpty, let currentAgent = agent, !isRunning else { return }
+        guard !text.isEmpty, let currentClient = client, !isRunning else { return }
         inputText = ""
 
         messages.append(UIMessage(role: .user, text: text))
@@ -282,7 +297,11 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
 
         taskHandle = Task.detached {
             do {
-                try await currentAgent.run(text)
+                let snapshot = try await currentClient.submit(text)
+                await MainActor.run {
+                    self.activeRuntimeTaskID = snapshot?.activeTaskID
+                    self.isRunning = false
+                }
             } catch {
                 await MainActor.run {
                     self.ensureAssistantBubble()
@@ -302,13 +321,14 @@ final class AgentUIViewModel: ObservableObject, AgentEventSink {
     }
 
     func stop() {
-        taskHandle?.cancel()
+        if let taskID = activeRuntimeTaskID, let client {
+            Task { try? await client.cancel(taskID: taskID) }
+        }
         liveThinkingLabel = "Останавливаю задачу…"
     }
 
     func clearHistory() {
         messages.removeAll()
-        Task { await agent?.clear() }
     }
 
         func copyFullChat() {

@@ -698,6 +698,9 @@ final class ToolRegistry: @unchecked Sendable {
         _ invocation: NormalizedToolInvocation,
         allowed: Set<String>
     ) async -> String {
+        if Task.isCancelled {
+            return #"{"ok":false,"error":"task cancelled","cancelled":true}"#
+        }
         let name = invocation.name
         let args = invocation.arguments
 
@@ -1552,6 +1555,7 @@ extension ToolRegistry {
         scope: String?,
         taskID: String
     ) async throws -> String {
+        try Task.checkCancellation()
         let plan = await codeIntelligence.planRename(
             symbol: symbol, newName: newName, path: scope, taskID: taskID
         )
@@ -1569,6 +1573,7 @@ extension ToolRegistry {
         case .invalid(let reason):
             throw CLIError(reason)
         case .ready(let edit):
+            try Task.checkCancellation()
             var bases: [String: String] = [:]
             var preApply: [String: ArtifactRevisionID?] = [:]
             for item in edit.edits {
@@ -1581,6 +1586,7 @@ extension ToolRegistry {
                 }
             }
             // Conflict (moved base) throws here: nothing applied, no evidence.
+            try Task.checkCancellation()
             let applied = try workspace.applySemanticPlan(edit.edits, contents: bases)
             let files = applied.keys.sorted()
             // Post-edit validation on the NEW revisions; revert-all on failure.

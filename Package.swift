@@ -6,7 +6,9 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "mlxagent", targets: ["MLXAgent"]),
-        .library(name: "SLTACore", targets: ["SLTACore"])
+        .executable(name: "slta-runtime", targets: ["SLTARuntimeLauncher"]),
+        .library(name: "SLTACore", targets: ["SLTACore"]),
+        .library(name: "SLTAIPC", targets: ["SLTAIPC"])
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.4")),
@@ -19,10 +21,14 @@ let package = Package(
         .target(
             name: "SLTACore"
         ),
+        .target(
+            name: "SLTAIPC"
+        ),
         .executableTarget(
             name: "MLXAgent",
             dependencies: [
                 "SLTACore",
+                "SLTAIPC",
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
@@ -32,9 +38,17 @@ let package = Package(
                 .product(name: "Textual", package: "textual")
             ]
         ),
+        .executableTarget(
+            name: "SLTARuntimeLauncher",
+            dependencies: ["SLTAIPC"]
+        ),
         .testTarget(
             name: "MLXAgentTests",
             dependencies: ["SLTACore"]
+        ),
+        .testTarget(
+            name: "SLTAIPCTests",
+            dependencies: ["SLTAIPC"]
         )
     ]
 )

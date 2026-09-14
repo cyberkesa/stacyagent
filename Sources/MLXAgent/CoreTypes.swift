@@ -100,6 +100,8 @@ struct AgentOptions: Sendable {
                 exit(0)
             case "--cli":
                 i += 1
+            case "--runtime-service", "--fake-runtime":
+                i += 1
             default:
                 if args[i].hasPrefix("-") {
                     throw CLIError("Unknown option: \(args[i])")

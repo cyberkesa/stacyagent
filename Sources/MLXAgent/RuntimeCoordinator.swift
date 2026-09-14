@@ -353,6 +353,7 @@ public final class RuntimeCoordinator: Sendable {
                 )
 
             case .deterministic(let action):
+                try Task.checkCancellation()
                 let attemptKey = action.description + "|" + roundFingerprint
                 guard attemptedDeterministicActions.insert(attemptKey).inserted else {
                     break roundLoop
@@ -474,6 +475,7 @@ public final class RuntimeCoordinator: Sendable {
                 await events.emit(.intelligenceStarted(taskID: Self.taskID(of: roundStart), kind: request.kind.rawValue))
                 // Exactly ONE physical generation per loop iteration.
                 let response = try await provider.generate(modelRequest)
+                try Task.checkCancellation()
                 providerCalls.append(response.telemetry)
                 await computationRouter.record(
                     computationRequest,
@@ -821,6 +823,7 @@ public final class RuntimeCoordinator: Sendable {
         // owns recovery policy and never hides a failed generation.
         do {
             let response = try await provider.generate(request)
+            try Task.checkCancellation()
             providerCalls.append(response.telemetry)
             await computationRouter.record(
                 computationRequest,

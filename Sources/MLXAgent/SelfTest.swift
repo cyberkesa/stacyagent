@@ -1951,6 +1951,15 @@ for line in sys.stdin:
             }
         }
 
+        // v0.32 real-process UDS integration with FakeModelProvider.
+        for result in await IPCIntegrationSelfTest.runAll() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
         // v0.30 §21 real LSP integration (opt-in via SLTA_LSP_INTEGRATION=1).
         for result in await LSPIntegrationSelfTest.runIfEnabled() {
             if result.passed {
