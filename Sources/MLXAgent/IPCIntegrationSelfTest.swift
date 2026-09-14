@@ -1,5 +1,5 @@
 import Foundation
-import SLTAIPC
+import StacyAgentIPC
 
 struct IPCCheckResult {
     var passed: Bool
@@ -14,7 +14,7 @@ enum IPCIntegrationSelfTest {
         }
 
         let workspace = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-runtime-integration-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-runtime-integration-\(UUID().uuidString)", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
             try Data("struct UserManager {}\nlet marker = \"TODO\"\n".utf8)
@@ -35,7 +35,7 @@ enum IPCIntegrationSelfTest {
         }
 
         let executable = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-        let launcher = executable.deletingLastPathComponent().appendingPathComponent("slta-runtime")
+        let launcher = executable.deletingLastPathComponent().appendingPathComponent("stacyagent-runtime")
         let process = Process()
         process.executableURL = launcher
         process.arguments = [workspace.path, "--fake-runtime", "--no-mcp"]

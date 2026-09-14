@@ -2,7 +2,7 @@ import Foundation
 
 enum ProjectInstructions {
     static func load(root: URL) -> String {
-        let candidates = ["SLTA.md", ".slta.md", "AGENTS.md"]
+        let candidates = ["STACY_AGENT.md", ".stacyagent.md", "AGENTS.md"]
         var sections: [String] = []
         var remaining = 32_000
 

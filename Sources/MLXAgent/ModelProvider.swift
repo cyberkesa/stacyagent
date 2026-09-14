@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 
 // MARK: - v0.28 Runtime / ModelProvider boundary
 //

@@ -2,9 +2,9 @@
   "$schema": "https://opencode.ai/config.json",
   "model": "opencode/deepseek-v4-flash-free",
   "provider": {
-    "slta-local": {
+    "stacyagent-local": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "SLTA Local MLX",
+      "name": "Stacy Agent Local MLX",
       "options": {
         "baseURL": "http://127.0.0.1:8080/v1"
       },

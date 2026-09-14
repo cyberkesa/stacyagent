@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 
 // MARK: - v0.28 AgentLoop (thin turn layer)
 //
@@ -75,17 +75,24 @@ final class AgentLoop: @unchecked Sendable {
 
     func statsText() -> String {
         guard let stats = lastStats else { return "no stats yet" }
-        return "tokens: \(stats.outputTokens) elapsed: \(TerminalRenderer.format(stats.elapsed))"
+        return "tokens: \(stats.outputTokens) elapsed: \(Self.format(stats.elapsed))"
+    }
+
+    private static func format(_ duration: Duration) -> String {
+        let components = duration.components
+        let seconds = Double(components.seconds)
+            + Double(components.attoseconds) / 1_000_000_000_000_000_000
+        return seconds < 1
+            ? String(format: "%.0fms", seconds * 1000)
+            : String(format: "%.1fs", seconds)
     }
 
     func run(_ task: String) async throws {
-        await registry.state.resetTask()
-        await events.emit(.taskStarted(task))
-
-        var stats = GenerationStats()
-        let sessionBefore = await sessionContext.snapshot()
-
+        // Conversational fast path: greetings and other direct matches must
+        // not create a project task, must not touch ContextEngine /
+        // ComputationRouter / ModelProvider. Answer inline and return.
         if let direct = ConversationDirectRouter.match(task) {
+            var stats = GenerationStats()
             let answer: String
             switch direct {
             case .greeting(let response):
@@ -106,6 +113,12 @@ final class AgentLoop: @unchecked Sendable {
             await events.emit(.completed(stats))
             return
         }
+
+        await registry.state.resetTask()
+        await events.emit(.taskStarted(task))
+
+        var stats = GenerationStats()
+        let sessionBefore = await sessionContext.snapshot()
 
         if let answer = sessionBefore.directAnswer(for: task) {
             stats.routeSource = .direct

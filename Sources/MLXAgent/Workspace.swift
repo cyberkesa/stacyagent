@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 
 private final class WorkspaceTaskCache: @unchecked Sendable {
     private let lock = NSLock()
@@ -183,7 +183,7 @@ enum SmartBlockMatcher {
 final class Workspace: @unchecked Sendable {
     let root: URL
     let shellTimeoutSeconds: Int
-    let limits: SLTALimits
+    let limits: StacyAgentLimits
     /// v0.29 single ArtifactGraph per project (revision-aware source of truth).
     let graph: ArtifactGraph
 
@@ -206,7 +206,7 @@ final class Workspace: @unchecked Sendable {
         policy: PolicyEngine,
         runtime: RuntimeEnvironment,
         editHistoryRoot: URL? = nil,
-        limits: SLTALimits = .fromEnvironment(),
+        limits: StacyAgentLimits = .fromEnvironment(),
         artifactGraph: ArtifactGraph? = nil
     ) {
         let resolvedRoot = root.resolvingSymlinksInPath().standardizedFileURL
@@ -249,11 +249,11 @@ final class Workspace: @unchecked Sendable {
         guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory),
               !isDirectory.boolValue else {
             _ = detectExternalDeletion(key: canonicalKey(path))
-            throw SLTAError.fileNotFound(path)
+            throw StacyAgentError.fileNotFound(path)
         }
         let attributes = try fm.attributesOfItem(atPath: url.path)
         if let size = attributes[.size] as? NSNumber, size.intValue > limits.fileMaxBytes {
-            throw SLTAError.fileTooLarge(path: path, limit: limits.fileMaxBytes)
+            throw StacyAgentError.fileTooLarge(path: path, limit: limits.fileMaxBytes)
         }
         let content = try String(contentsOf: url, encoding: .utf8)
         let key = canonicalKey(path)
@@ -285,7 +285,7 @@ final class Workspace: @unchecked Sendable {
         for (key, _) in byFile {
             let url = try resolve(key)
             guard let expected = contents[key] else {
-                throw SLTAError.revisionConflict("no base content for \(key)")
+                throw StacyAgentError.revisionConflict("no base content for \(key)")
             }
             try verifyUnchangedBase(url: url, expectedContent: expected,
                                     expectedExists: true, path: key)
@@ -296,7 +296,7 @@ final class Workspace: @unchecked Sendable {
         do {
             for (key, items) in byFile.sorted(by: { $0.key < $1.key }) {
                 guard let base = contents[key] else {
-                    throw SLTAError.revisionConflict("no base content for \(key)")
+                    throw StacyAgentError.revisionConflict("no base content for \(key)")
                 }
                 let updated = Self.applyByteEdits(to: base, edits: items)
                 let url = try resolve(key)
@@ -426,17 +426,17 @@ final class Workspace: @unchecked Sendable {
         let current: String? = try? String(contentsOf: url, encoding: .utf8)
         if expectedExists {
             guard let current else {
-                throw SLTAError.revisionConflict(
+                throw StacyAgentError.revisionConflict(
                     "file disappeared under runtime for \(path); reread before mutating"
                 )
             }
             guard ArtifactHash.sha256(current) == ArtifactHash.sha256(expectedContent ?? "") else {
-                throw SLTAError.revisionConflict(
+                throw StacyAgentError.revisionConflict(
                     "file changed under runtime for \(path); expected base no longer current"
                 )
             }
         } else if current != nil {
-            throw SLTAError.revisionConflict(
+            throw StacyAgentError.revisionConflict(
                 "file appeared under runtime for \(path); reread before creating"
             )
         }
@@ -468,10 +468,10 @@ final class Workspace: @unchecked Sendable {
     private func loadTextFile(path: String, url: URL) throws -> String {
         var isDirectory: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
-            throw SLTAError.fileNotFound(path)
+            throw StacyAgentError.fileNotFound(path)
         }
         guard !isDirectory.boolValue else {
-            throw SLTAError.isDirectory(path)
+            throw StacyAgentError.isDirectory(path)
         }
         return try String(contentsOf: url, encoding: .utf8)
     }
@@ -527,15 +527,15 @@ final class Workspace: @unchecked Sendable {
         var isDirectory: ObjCBool = false
         guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory) else {
             _ = detectExternalDeletion(key: canonicalKey(path))
-            throw SLTAError.fileNotFound(path)
+            throw StacyAgentError.fileNotFound(path)
         }
         guard !isDirectory.boolValue else {
-            throw SLTAError.isDirectory(path)
+            throw StacyAgentError.isDirectory(path)
         }
 
         let attributes = try fm.attributesOfItem(atPath: url.path)
         if let size = attributes[.size] as? NSNumber, size.intValue > limits.fileMaxBytes {
-            throw SLTAError.fileTooLarge(path: path, limit: limits.fileMaxBytes)
+            throw StacyAgentError.fileTooLarge(path: path, limit: limits.fileMaxBytes)
         }
 
         let text = try String(contentsOf: url, encoding: .utf8)
@@ -1040,7 +1040,7 @@ final class Workspace: @unchecked Sendable {
             let freshURL = url.appending(
                 queryItems: [
                     URLQueryItem(
-                        name: "slta_reload",
+                        name: "stacyagent_reload",
                         value: String(Int(Date().timeIntervalSince1970 * 1_000))
                     )
                 ]
@@ -1209,7 +1209,7 @@ final class Workspace: @unchecked Sendable {
     private struct ProcessResult { let status: Int32; let output: String }
 
     private func run(_ executable: String, _ arguments: [String], _ timeout: Int, allow: Set<Int32> = []) throws -> ProcessResult {
-        let directory = fm.temporaryDirectory.appendingPathComponent("slta-\(UUID().uuidString)", isDirectory: true)
+        let directory = fm.temporaryDirectory.appendingPathComponent("stacyagent-\(UUID().uuidString)", isDirectory: true)
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: directory) }
 
@@ -1276,8 +1276,8 @@ final class Workspace: @unchecked Sendable {
         let expanded = (path as NSString).expandingTildeInPath
         let candidate = URL(fileURLWithPath: expanded, relativeTo: root).standardizedFileURL.resolvingSymlinksInPath()
         let rootPrefix = root.path.hasSuffix("/") ? root.path : root.path + "/"
-        let sltaHome = fm.homeDirectoryForCurrentUser.appendingPathComponent(".slta").path
-        let isConfig = candidate.path.hasPrefix(sltaHome)
+        let stacyagentHome = fm.homeDirectoryForCurrentUser.appendingPathComponent(".stacyagent").path
+        let isConfig = candidate.path.hasPrefix(stacyagentHome)
 
         guard candidate.path == root.path || candidate.path.hasPrefix(rootPrefix) || isConfig else {
             throw CLIError("path escapes project sandbox: \(path)")

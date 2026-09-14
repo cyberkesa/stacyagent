@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 
 enum ToolRisk: Sendable {
     case read

@@ -2,7 +2,7 @@ import Foundation
 
 // MARK: - v0.30 §21 real SourceKit-LSP integration scenario
 //
-// Opt-in ONLY (env SLTA_LSP_INTEGRATION=1): spins the real installed
+// Opt-in ONLY (env STACYAGENT_LSP_INTEGRATION=1): spins the real installed
 // sourcekit-lsp against a temporary SwiftPM package and drives the full
 // deterministic rename pipeline. Never runs in the fast suite, never
 // touches ModelProvider. Reports BLOCKED honestly when the server is
@@ -10,7 +10,7 @@ import Foundation
 
 enum LSPIntegrationSelfTest {
     static func runIfEnabled() async -> [CodeIntelCheckResult] {
-        guard ProcessInfo.processInfo.environment["SLTA_LSP_INTEGRATION"] == "1" else {
+        guard ProcessInfo.processInfo.environment["STACYAGENT_LSP_INTEGRATION"] == "1" else {
             return []
         }
         var out: [CodeIntelCheckResult] = []
@@ -20,7 +20,7 @@ enum LSPIntegrationSelfTest {
 
         let fm = FileManager.default
         let dir = fm.temporaryDirectory
-            .appendingPathComponent("slta-lsp-int-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-lsp-int-\(UUID().uuidString)", isDirectory: true)
         defer { try? fm.removeItem(at: dir) }
         do {
             let sources = dir.appendingPathComponent("Sources/Probe", isDirectory: true)

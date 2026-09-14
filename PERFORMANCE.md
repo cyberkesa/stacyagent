@@ -1,4 +1,4 @@
-# SLTA performance rules
+# Stacy Agent performance rules
 
 1. LLM passes are a budget, not a convenience.
 2. Deterministic runtime work never goes through the model.

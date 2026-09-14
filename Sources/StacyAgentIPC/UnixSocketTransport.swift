@@ -23,30 +23,30 @@ public final class WorkspaceRuntimeLock: @unchecked Sendable {
     private let lock = NSLock()
     private var fd: Int32
 
-    public init(workspaceURL: URL) throws {
-        lockURL = WorkspaceIdentity.lockURL(for: workspaceURL)
-        let directory = lockURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        _ = chmod(directory.path, 0o700)
-        let opened = Darwin.open(lockURL.path, O_RDWR | O_CREAT, 0o600)
-        guard opened >= 0 else {
-            throw UnixSocketError.system(operation: "open runtime lock", code: errno)
-        }
-        guard flock(opened, LOCK_EX | LOCK_NB) == 0 else {
-            let code = errno
-            Darwin.close(opened)
-            if code == EWOULDBLOCK { throw UnixSocketError.alreadyRunning }
-            throw UnixSocketError.system(operation: "lock runtime", code: code)
-        }
-        fd = opened
-        _ = ftruncate(opened, 0)
-        let metadata = Data("pid=\(getpid())\n".utf8)
-        try? UnixSocketSupport.sendAll(fd: opened, data: metadata)
-        _ = chmod(lockURL.path, 0o600)
-    }
+     public init(workspaceURL: URL) throws {
+         lockURL = WorkspaceIdentity.lockURL(for: workspaceURL)
+         let directory = lockURL.deletingLastPathComponent()
+         try FileManager.default.createDirectory(
+             at: directory, withIntermediateDirectories: true,
+             attributes: [.posixPermissions: 0o700]
+         )
+         _ = chmod(directory.path, 0o700)
+         let opened = Darwin.open(lockURL.path, O_RDWR | O_CREAT, 0o600)
+         guard opened >= 0 else {
+             throw UnixSocketError.system(operation: "open runtime lock", code: errno)
+         }
+         guard flock(opened, LOCK_EX | LOCK_NB) == 0 else {
+             let code = errno
+             Darwin.close(opened)
+             if code == EWOULDBLOCK { throw UnixSocketError.alreadyRunning }
+             throw UnixSocketError.system(operation: "lock runtime", code: code)
+         }
+         fd = opened
+         _ = ftruncate(opened, 0)
+         let metadata = Data("pid=\(getpid())\n".utf8)
+         try? UnixSocketSupport.sendAll(fd: opened, data: metadata)
+         _ = chmod(lockURL.path, 0o600)
+     }
 
     public func release() {
         let value = lock.withLock { () -> Int32 in
@@ -159,30 +159,30 @@ public final class UnixSocketServer: @unchecked Sendable {
     private var listenerFD: Int32 = -1
     private var connections: Set<IPCServerConnection> = []
     private var stopped = false
-    private let acceptQueue = DispatchQueue(label: "slta.ipc.accept")
+    private let acceptQueue = DispatchQueue(label: "stacyagent.ipc.accept")
 
     public init(socketURL: URL, handler: @escaping Handler) {
         self.socketURL = socketURL
         self.handler = handler
     }
 
-    public func start() throws {
-        let directory = socketURL.deletingLastPathComponent()
-        try FileManager.default.createDirectory(
-            at: directory, withIntermediateDirectories: true,
-            attributes: [.posixPermissions: 0o700]
-        )
-        _ = chmod(directory.path, 0o700)
+     public func start() throws {
+         let directory = socketURL.deletingLastPathComponent()
+         try FileManager.default.createDirectory(
+             at: directory, withIntermediateDirectories: true,
+             attributes: [.posixPermissions: 0o700]
+         )
+         _ = chmod(directory.path, 0o700)
 
-        if FileManager.default.fileExists(atPath: socketURL.path) {
-            if let probe = try? UnixSocketSupport.socketFD() {
-                defer { Darwin.close(probe) }
-                if (try? UnixSocketSupport.connect(fd: probe, path: socketURL.path)) != nil {
-                    throw UnixSocketError.alreadyRunning
-                }
-            }
-            try FileManager.default.removeItem(at: socketURL)
-        }
+         if FileManager.default.fileExists(atPath: socketURL.path) {
+             if let probe = try? UnixSocketSupport.socketFD() {
+                 defer { Darwin.close(probe) }
+                 if (try? UnixSocketSupport.connect(fd: probe, path: socketURL.path)) != nil {
+                     throw UnixSocketError.alreadyRunning
+                 }
+             }
+             try FileManager.default.removeItem(at: socketURL)
+         }
 
         let fd = try UnixSocketSupport.socketFD()
         do {
@@ -322,7 +322,7 @@ public final class RuntimeClient: @unchecked Sendable {
 
     public func connect(
         clientName: String = "mlxagent",
-        protocolVersion: Int = SLTAIPCProtocolVersion
+        protocolVersion: Int = StacyAgentIPCProtocolVersion
     ) async throws {
         try await Task.detached { [self] in
             try requestLock.withLock {
@@ -420,7 +420,7 @@ public final class RuntimeClient: @unchecked Sendable {
     private func performLocked(
         kind: IPCMessageKind,
         payload: IPCPayload,
-        protocolVersion: Int = SLTAIPCProtocolVersion
+        protocolVersion: Int = StacyAgentIPCProtocolVersion
     ) throws -> IPCEnvelope {
         let socket = stateLock.withLock { fd }
         guard socket >= 0 else { throw UnixSocketError.notConnected }
@@ -452,7 +452,7 @@ public final class RuntimeClient: @unchecked Sendable {
         if case .error(let error) = envelope.payload {
             if error.code == "version_mismatch" {
                 throw IPCProtocolError.versionMismatch(
-                    expected: SLTAIPCProtocolVersion,
+                    expected: StacyAgentIPCProtocolVersion,
                     received: envelope.protocolVersion
                 )
             }

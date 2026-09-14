@@ -51,8 +51,8 @@ struct NormalizedToolInvocation: Sendable {
 /// reflecting over MLXLMCommon.ToolCall argument internals. The envelope is stripped
 /// before the tool result is returned to the model.
 enum NativeToolEnvelope {
-    private static let readPrefix = "__SLTA_NATIVE_READ_V1__"
-    private static let observationPrefix = "__SLTA_NATIVE_OBSERVE_V1__"
+    private static let readPrefix = "__STACYAGENT_NATIVE_READ_V1__"
+    private static let observationPrefix = "__STACYAGENT_NATIVE_OBSERVE_V1__"
 
     static func encodeRead(path: String, content: String) -> String {
         encode(prefix: readPrefix, path: path, content: content)
@@ -101,7 +101,7 @@ enum NativeToolEnvelope {
 }
 
 enum MCPToolEnvelope {
-    private static let prefix = "__SLTA_MCP_RESULT_V1__"
+    private static let prefix = "__STACYAGENT_MCP_RESULT_V1__"
 
     static func encode(
         server: String,

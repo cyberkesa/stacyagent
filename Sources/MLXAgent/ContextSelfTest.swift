@@ -14,7 +14,7 @@ enum ContextSelfTest {
         -> (URL, Workspace, FakeCodeIntelligenceProvider, CodeIntelligenceEngine, ContextEngine)
     {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-ctx-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-ctx-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for (name, content) in files {
             let url = dir.appendingPathComponent(name)
@@ -675,7 +675,7 @@ extension ContextSelfTest {
             "Sources/Pkg/B.swift": bSwift
         ]
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-pkg-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-pkg-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for (name, content) in files {
             let url = dir.appendingPathComponent(name)

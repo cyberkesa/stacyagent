@@ -3,7 +3,7 @@ import os
 
 /// Единый логгер вместо разрозненных print/fputs/try?.
 public enum AppLog {
-    private static let subsystem = "ai.slta.mlxagent"
+    private static let subsystem = "ai.stacyagent.mlxagent"
     private static let persistence = Logger(subsystem: subsystem, category: "persistence")
     private static let workspace = Logger(subsystem: subsystem, category: "workspace")
     private static let mcp = Logger(subsystem: subsystem, category: "mcp")
@@ -11,7 +11,7 @@ public enum AppLog {
 
     public static func persistenceError(_ message: String) {
         persistence.error("\(message, privacy: .public)")
-        fputs("SLTA persistence: \(message)\n", stderr)
+        fputs("Stacy Agent persistence: \(message)\n", stderr)
     }
 
     public static func workspaceError(_ message: String) {

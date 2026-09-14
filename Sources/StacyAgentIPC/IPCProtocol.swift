@@ -1,6 +1,6 @@
 import Foundation
 
-public let SLTAIPCProtocolVersion = 1
+public let StacyAgentIPCProtocolVersion = 1
 
 public enum IPCMessageKind: String, Codable, Sendable {
     case handshake, openWorkspace, submitTurn, cancelTask, getSnapshot
@@ -15,7 +15,7 @@ public struct IPCEnvelope: Codable, Sendable {
     public var payload: IPCPayload
 
     public init(
-        protocolVersion: Int = SLTAIPCProtocolVersion,
+        protocolVersion: Int = StacyAgentIPCProtocolVersion,
         requestID: UUID = UUID(),
         workspaceID: String,
         kind: IPCMessageKind,
@@ -47,7 +47,7 @@ public struct HandshakePayload: Codable, Sendable {
     public var clientName: String
     public var supportedVersion: Int
 
-    public init(clientName: String, supportedVersion: Int = SLTAIPCProtocolVersion) {
+    public init(clientName: String, supportedVersion: Int = StacyAgentIPCProtocolVersion) {
         self.clientName = clientName
         self.supportedVersion = supportedVersion
     }

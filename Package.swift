@@ -6,9 +6,9 @@ let package = Package(
     platforms: [.macOS(.v15)],
     products: [
         .executable(name: "mlxagent", targets: ["MLXAgent"]),
-        .executable(name: "slta-runtime", targets: ["SLTARuntimeLauncher"]),
-        .library(name: "SLTACore", targets: ["SLTACore"]),
-        .library(name: "SLTAIPC", targets: ["SLTAIPC"])
+        .executable(name: "stacyagent-runtime", targets: ["StacyAgentRuntimeLauncher"]),
+        .library(name: "StacyAgentCore", targets: ["StacyAgentCore"]),
+        .library(name: "StacyAgentIPC", targets: ["StacyAgentIPC"])
     ],
     dependencies: [
         .package(url: "https://github.com/ml-explore/mlx-swift-lm", .upToNextMajor(from: "3.31.4")),
@@ -19,16 +19,16 @@ let package = Package(
     ],
     targets: [
         .target(
-            name: "SLTACore"
+            name: "StacyAgentCore"
         ),
         .target(
-            name: "SLTAIPC"
+            name: "StacyAgentIPC"
         ),
         .executableTarget(
             name: "MLXAgent",
             dependencies: [
-                "SLTACore",
-                "SLTAIPC",
+                "StacyAgentCore",
+                "StacyAgentIPC",
                 .product(name: "MLXLLM", package: "mlx-swift-lm"),
                 .product(name: "MLXLMCommon", package: "mlx-swift-lm"),
                 .product(name: "MLXHuggingFace", package: "mlx-swift-lm"),
@@ -39,16 +39,16 @@ let package = Package(
             ]
         ),
         .executableTarget(
-            name: "SLTARuntimeLauncher",
-            dependencies: ["SLTAIPC"]
+            name: "StacyAgentRuntimeLauncher",
+            dependencies: ["StacyAgentIPC"]
         ),
         .testTarget(
             name: "MLXAgentTests",
-            dependencies: ["SLTACore"]
+            dependencies: ["StacyAgentCore"]
         ),
         .testTarget(
-            name: "SLTAIPCTests",
-            dependencies: ["SLTAIPC"]
+            name: "StacyAgentIPCTests",
+            dependencies: ["StacyAgentIPC"]
         )
     ]
 )

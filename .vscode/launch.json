@@ -19,6 +19,26 @@
             "target": "mlxagent",
             "configuration": "release",
             "preLaunchTask": "swift: Build Release mlxagent"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:StacyAgent-v0.27}",
+            "name": "Debug stacyagent-runtime",
+            "target": "stacyagent-runtime",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug stacyagent-runtime"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:StacyAgent-v0.27}",
+            "name": "Release stacyagent-runtime",
+            "target": "stacyagent-runtime",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release stacyagent-runtime"
         }
     ]
 }

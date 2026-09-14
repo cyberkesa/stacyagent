@@ -178,7 +178,7 @@ struct SessionSnapshot: Sendable {
                 projectPath: projectPath,
                 artifact: artifact
             )
-            var answer = "Да, это текущий артефакт: `\(fullPath)`. SLTA может читать и редактировать его через workspace-инструменты."
+            var answer = "Да, это текущий артефакт: `\(fullPath)`. Stacy Agent может читать и редактировать его через workspace-инструменты."
             if let lastFailure {
                 answer += " Предыдущая попытка редактирования не завершилась: " +
                     Self.clip(lastFailure, limit: 260) + "."

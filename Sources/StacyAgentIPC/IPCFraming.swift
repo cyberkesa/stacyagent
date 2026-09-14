@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public enum IPCFrameError: Error, CustomStringConvertible, Sendable {
     case emptyFrame
@@ -70,8 +71,21 @@ public struct IPCFrameDecoder: Sendable {
 }
 
 public enum WorkspaceIdentity {
+    /// True realpath canonicalization for existing paths.
+    /// Rationale: URL.resolvingSymlinksInPath().standardizedFileURL is NOT
+    /// stable across equivalent spellings on Darwin (observed: an existing
+    /// /tmp/x stays /tmp/x while /private/tmp/x collapses to /tmp/x, but
+    /// missing paths are left untouched). IPC identity must be
+    /// byte-identical on both ends, so both Swift and TypeScript use
+    /// realpath(3) semantics here. Falls back to the legacy form only when
+    /// the path does not exist (never the case for connect/open flows).
     public static func canonicalPath(_ url: URL) -> String {
-        url.resolvingSymlinksInPath().standardizedFileURL.path
+        let path = url.path
+        var resolved = [CChar](repeating: 0, count: Int(PATH_MAX))
+        if Darwin.realpath(path, &resolved) != nil {
+            return String(cString: resolved)
+        }
+        return url.resolvingSymlinksInPath().standardizedFileURL.path
     }
 
     public static func stableID(for url: URL) -> String {
@@ -89,13 +103,13 @@ public enum WorkspaceIdentity {
 
     public static func socketURL(for url: URL) -> URL {
         let run = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".slta/run", isDirectory: true)
+            .appendingPathComponent(".stacyagent/run", isDirectory: true)
         return run.appendingPathComponent(stableID(for: url) + ".sock")
     }
 
     public static func lockURL(for url: URL) -> URL {
         let run = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".slta/run", isDirectory: true)
+            .appendingPathComponent(".stacyagent/run", isDirectory: true)
         return run.appendingPathComponent(stableID(for: url) + ".lock")
     }
 }

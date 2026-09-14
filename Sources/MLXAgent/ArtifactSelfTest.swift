@@ -17,7 +17,7 @@ enum ArtifactSelfTest {
 
     static func makeProject() throws -> (URL, Workspace, RuntimeState) {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-art-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-art-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let runtime = RuntimeEnvironment.probe(projectURL: dir)
         let workspace = Workspace(
@@ -422,7 +422,7 @@ extension ArtifactSelfTest {
         -> (URL, Workspace, RuntimeState, ToolRegistry)
     {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-hard-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-hard-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let policy = PolicyEngine(mode: .workspace, allowMCP: false)
         let runtime = RuntimeEnvironment.probe(projectURL: dir)
@@ -614,10 +614,10 @@ extension ArtifactSelfTest {
                 kindOf(item) == kindOfRecord(rec) && item.path == rec.path
             }
             // persist/restore round-trip preserves 1:1
-            let store = RuntimePersistence(projectPath: "/tmp/slta-hardening-probe")
+            let store = RuntimePersistence(projectPath: "/tmp/stacyagent-hardening-probe")
             let persisted = PersistedRuntimeState(
                 schemaVersion: RuntimePersistence.schemaVersion,
-                projectID: "probe", projectPath: "/tmp/slta-hardening-probe",
+                projectID: "probe", projectPath: "/tmp/stacyagent-hardening-probe",
                 savedAt: Date(), spec: snapshot.spec,
                 requirements: snapshot.requirements, records: journal,
                 itemRevisions: journal.map { $0.revisionID },

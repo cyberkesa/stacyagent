@@ -1,7 +1,47 @@
 import Foundation
 import Darwin
-import SLTAIPC
-import SLTACore
+import StacyAgentIPC
+import StacyAgentCore
+
+enum RuntimeModelState: String, Sendable {
+    case starting
+    case modelLoading
+    case ready
+    case error
+}
+
+final class RuntimeServiceHostState: @unchecked Sendable {
+    private let lock = NSLock()
+    private(set) var state: RuntimeModelState = .starting
+    private(set) var errorMessage: String?
+    private(set) var modelLoadDurationMs: UInt64?
+    private let modelID: String
+    private(set) var modelProvider: MLXProvider?
+
+    init(modelID: String) {
+        self.modelID = modelID
+    }
+
+    func transition(to newState: RuntimeModelState, error: String? = nil, durationMs: UInt64? = nil) {
+        lock.withLock {
+            state = newState
+            errorMessage = error
+            if let durationMs { modelLoadDurationMs = durationMs }
+        }
+    }
+
+    func snapshot() -> (state: RuntimeModelState, error: String?, modelID: String, durationMs: UInt64?) {
+        lock.withLock { (state, errorMessage, modelID, modelLoadDurationMs) }
+    }
+
+    func setProvider(_ provider: MLXProvider?) {
+        lock.withLock { modelProvider = provider }
+    }
+
+    func getProvider() -> MLXProvider? {
+        lock.withLock { modelProvider }
+    }
+}
 
 final class RuntimeEventRelay: AgentEventSink, @unchecked Sendable {
     private let workspaceID: String
@@ -262,10 +302,10 @@ private actor RuntimeServiceController {
     }
 
     func handle(_ envelope: IPCEnvelope) async -> IPCEnvelope? {
-        guard envelope.protocolVersion == SLTAIPCProtocolVersion else {
+        guard envelope.protocolVersion == StacyAgentIPCProtocolVersion else {
             return error(
                 envelope, code: "version_mismatch",
-                message: "runtime supports protocol \(SLTAIPCProtocolVersion)"
+                message: "runtime supports protocol \(StacyAgentIPCProtocolVersion)"
             )
         }
         if envelope.kind != .handshake, envelope.workspaceID != workspaceID {
@@ -274,10 +314,10 @@ private actor RuntimeServiceController {
 
         switch (envelope.kind, envelope.payload) {
         case (.handshake, .handshake(let value)):
-            guard value.supportedVersion == SLTAIPCProtocolVersion else {
+            guard value.supportedVersion == StacyAgentIPCProtocolVersion else {
                 return error(
                     envelope, code: "version_mismatch",
-                    message: "runtime supports protocol \(SLTAIPCProtocolVersion)"
+                    message: "runtime supports protocol \(StacyAgentIPCProtocolVersion)"
                 )
             }
             return response(envelope, message: "handshake accepted")
@@ -352,6 +392,10 @@ private actor RuntimeServiceController {
         let final: String
         if cancelled.contains(id) {
             final = "cancelled"
+        } else if result == "completed",
+                  let summary = recentTaskSummary,
+                  ConversationDirectRouter.match(summary) != nil {
+            final = "completed"
         } else if result == "completed" {
             let state = await registry.taskSnapshot()
             final = state.isComplete ? "completed" : "incomplete"
@@ -408,20 +452,30 @@ private actor RuntimeServiceController {
     }
 }
 
+private final class RunTurnRef: @unchecked Sendable {
+    var closure: @Sendable (String) async throws -> Void
+    init(closure: @escaping @Sendable (String) async throws -> Void) {
+        self.closure = closure
+    }
+}
+
 final class RuntimeServiceHost: @unchecked Sendable {
     let server: UnixSocketServer
     private let controller: RuntimeServiceController
     let stopSemaphore = DispatchSemaphore(value: 0)
     private let ownership: WorkspaceRuntimeLock
+    let state: RuntimeServiceHostState
 
     private init(
         server: UnixSocketServer,
         controller: RuntimeServiceController,
-        ownership: WorkspaceRuntimeLock
+        ownership: WorkspaceRuntimeLock,
+        state: RuntimeServiceHostState
     ) {
         self.server = server
         self.controller = controller
         self.ownership = ownership
+        self.state = state
     }
 
     static func make(options: AgentOptions, fakeModel: Bool = false) async throws -> RuntimeServiceHost {
@@ -464,69 +518,172 @@ final class RuntimeServiceHost: @unchecked Sendable {
             contextEngine: context, computationRouter: router
         )
 
-        let runTurn: @Sendable (String) async throws -> Void
-        if fakeModel {
-            let model = FakeModelProvider()
-            model.script(Array(repeating: .doneProse, count: 32))
-            runTurn = { text in
-                try Task.checkCancellation()
-                if text == "__ipc_test_block__" {
-                    try await Task.sleep(for: .seconds(30))
-                    return
-                }
-                let decision = FastTurnRouter.decide(text) ?? .forMode(.agent, source: .fast)
-                await registry.beginTask(text, decision: decision)
-                let result = try await coordinator.run(
-                    RuntimeTaskInput(
-                        userText: text, decision: decision, maxRounds: options.maxRounds,
-                        sessionExcerpt: "", projectInstructions: "",
-                        runtimeContext: registry.runtimeContext,
-                        allowedTools: registry.allowedToolNames(for: decision.capabilities),
-                        agentMaxTokens: options.agentMaxTokens
-                    ),
-                    provider: model
-                )
-                try Task.checkCancellation()
-                if !result.displayText.isEmpty { await events.emit(.assistant(result.displayText)) }
-            }
-        } else {
-            await events.emit(.modelLoading)
-            let model = try await MLXProvider(
-                modelID: options.modelID, draftModelID: options.draftModelID,
-                events: events, chatMaxTokens: options.chatMaxTokens,
-                agentMaxTokens: options.agentMaxTokens,
-                timeoutSeconds: options.generationTimeoutSeconds,
-                controllerTimeoutSeconds: options.controllerTimeoutSeconds
-            )
-            let agent = AgentLoop(
-                mlx: model, coordinator: coordinator, registry: registry,
-                events: events, maxRounds: options.maxRounds,
-                chatMaxTokens: options.chatMaxTokens,
-                agentMaxTokens: options.agentMaxTokens
-            )
-            runTurn = { text in
-                try Task.checkCancellation()
-                try await agent.run(text)
-                try Task.checkCancellation()
-            }
-        }
+         let hostState = RuntimeServiceHostState(modelID: options.modelID)
+         let runTurnRef = RunTurnRef(closure: { _ in })
+         let controller = RuntimeServiceController(
+             workspaceID: workspaceID, workspacePath: canonical,
+             registry: registry, relay: relay, runTurn: runTurnRef.closure
+         )
+         let server = UnixSocketServer(socketURL: WorkspaceIdentity.socketURL(for: workspaceURL)) {
+             envelope, _ in await controller.handle(envelope)
+         }
+         relay.attach(server)
+         try server.start()
 
-        let controller = RuntimeServiceController(
-            workspaceID: workspaceID, workspacePath: canonical,
-            registry: registry, relay: relay, runTurn: runTurn
-        )
-        let server = UnixSocketServer(socketURL: WorkspaceIdentity.socketURL(for: workspaceURL)) {
-            envelope, _ in await controller.handle(envelope)
+         final class DirectSessionName: @unchecked Sendable { var value: String? }
+         let directSessionName = DirectSessionName()
+
+         if fakeModel {
+             let model = FakeModelProvider()
+             model.script(Array(repeating: .doneProse, count: 32))
+             runTurnRef.closure = { text in
+                 try Task.checkCancellation()
+                 if text == "__ipc_test_block__" {
+                     try await Task.sleep(for: .seconds(30))
+                     return
+                 }
+                 if let direct = ConversationDirectRouter.match(text) {
+                     let answer: String
+                     switch direct {
+                     case .greeting(let response): answer = response
+                     case .rememberName(let name, let response):
+                         directSessionName.value = name; answer = response
+                     case .recallName:
+                         answer = directSessionName.value != nil ? "Тебя зовут \(directSessionName.value!)." : "Я пока не знаю твоего имени."
+                     }
+                     await events.emit(.assistant(answer))
+                     return
+                 }
+                 let decision = FastTurnRouter.decide(text) ?? .forMode(.agent, source: .fast)
+                 await registry.beginTask(text, decision: decision)
+                 let result = try await coordinator.run(
+                     RuntimeTaskInput(
+                         userText: text, decision: decision, maxRounds: options.maxRounds,
+                         sessionExcerpt: "", projectInstructions: "",
+                         runtimeContext: registry.runtimeContext,
+                         allowedTools: registry.allowedToolNames(for: decision.capabilities),
+                         agentMaxTokens: options.agentMaxTokens
+                     ),
+                     provider: model
+                 )
+                 try Task.checkCancellation()
+                 if !result.displayText.isEmpty { await events.emit(.assistant(result.displayText)) }
+             }
+         } else {
+             runTurnRef.closure = { [hostState] text in
+                 if let direct = ConversationDirectRouter.match(text) {
+                     let answer: String
+                     switch direct {
+                     case .greeting(let response): answer = response
+                     case .rememberName(let name, let response):
+                         directSessionName.value = name; answer = response
+                     case .recallName:
+                         answer = directSessionName.value != nil
+                             ? "Тебя зовут \(directSessionName.value!)."
+                             : "Я пока не знаю твоего имени."
+                     }
+                     await events.emit(.assistant(answer))
+                     return
+                 }
+                 let snap = hostState.snapshot()
+                 if snap.state != .ready {
+                     throw StacyAgentError.io("MODEL_NOT_READY: \(snap.state == .error ? (snap.error ?? "unknown") : "Model is still loading")")
+                 }
+                 guard let rawProvider = hostState.getProvider() else {
+                     throw StacyAgentError.io("MODEL_NOT_READY: provider not yet available")
+                 }
+                 let provider = rawProvider
+                 let decision = TurnDecision.forMode(.agent)
+                 await registry.beginTask(text, decision: decision)
+                 let result = try await coordinator.run(
+                     RuntimeTaskInput(
+                         userText: text, decision: decision,
+                         maxRounds: options.maxRounds, sessionExcerpt: "", projectInstructions: "",
+                         runtimeContext: registry.runtimeContext,
+                         allowedTools: registry.allowedToolNames(for: decision.capabilities),
+                         agentMaxTokens: options.agentMaxTokens
+                     ),
+                     provider: provider
+                 )
+                 try Task.checkCancellation()
+                 if !result.displayText.isEmpty {
+                     await events.emit(.assistant(result.displayText))
+                 }
+             }
+         }
+
+         let host = RuntimeServiceHost(
+             server: server, controller: controller, ownership: ownership, state: hostState
+         )
+         await controller.setShutdownHandler { [weak host] in
+             host?.server.stop()
+             host?.stopSemaphore.signal()
+         }
+
+         if !fakeModel {
+             host.startModelLoading(options: options, events: events, registry: registry, coordinator: coordinator)
+         }
+
+         return host
+     }
+
+    private func startModelLoading(
+        options: AgentOptions, events: EventBus,
+        registry: ToolRegistry, coordinator: RuntimeCoordinator
+    ) {
+        state.transition(to: .modelLoading)
+        Task { [weak self] in
+            guard let self else { return }
+            let startTime = ContinuousClock.now
+            fputs("[MLX] init start\n", stderr)
+            do {
+                let resolvedPath = try Self.resolveLocalModelPath(modelID: options.modelID)
+                fputs("[MLX] resolved model path: \(resolvedPath)\n", stderr)
+                fputs("[MLX] BEFORE huggingFaceLoadModelContainer\n", stderr)
+                let beforeLoad = ContinuousClock.now
+                let provider = try await MLXProvider(
+                    modelID: options.modelID,
+                    draftModelID: options.draftModelID,
+                    events: events,
+                    chatMaxTokens: options.chatMaxTokens,
+                    agentMaxTokens: options.agentMaxTokens,
+                    timeoutSeconds: options.generationTimeoutSeconds,
+                    controllerTimeoutSeconds: options.controllerTimeoutSeconds
+                )
+                  let loadDuration = beforeLoad.duration(to: ContinuousClock.now)
+                  fputs("[MLXProvider] AFTER huggingFaceLoadModelContainer (\(Self.formatDuration(loadDuration)))\n", stderr)
+                  let durationMs = UInt64(max(0, loadDuration.components.seconds * 1000))
+                self.state.transition(to: .ready, durationMs: durationMs)
+                self.state.setProvider(provider)
+                fputs("[MLX] provider ready (\(durationMs)ms)\n", stderr)
+            } catch {
+                 let durationMs = UInt64(max(0, startTime.duration(to: ContinuousClock.now).components.seconds * 1000))
+                self.state.transition(to: .error, error: error.localizedDescription, durationMs: durationMs)
+                fputs("[MLX] provider error after \(durationMs)ms: \(error.localizedDescription)\n", stderr)
+                if let nsError = error as? NSError {
+                    fputs("[MLX] error domain: \(nsError.domain) code: \(nsError.code)\n", stderr)
+                }
+            }
         }
-        let host = RuntimeServiceHost(
-            server: server, controller: controller, ownership: ownership
-        )
-        relay.attach(server)
-        await controller.setShutdownHandler { [weak host] in
-            host?.server.stop()
-            host?.stopSemaphore.signal()
+    }
+
+    private static func resolveLocalModelPath(modelID: String) -> String {
+        let parts = modelID.split(separator: "/")
+        guard parts.count == 2 else { return modelID }
+        guard let cacheDir = try? MLXProvider.huggingFaceCacheDirectory() else { return "no-cache-dir" }
+        let hfDir = cacheDir.appendingPathComponent("models--\(parts[0])--\(parts[1])")
+        let refsFile = hfDir.appendingPathComponent("refs/main")
+        guard let commit = try? String(contentsOf: refsFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines),
+              FileManager.default.fileExists(atPath: hfDir.appendingPathComponent("snapshots").appendingPathComponent(commit).path) else {
+            return "not-in-local-cache"
         }
-        return host
+        return hfDir.appendingPathComponent("snapshots").appendingPathComponent(commit).path
+    }
+
+    private static func formatDuration(_ duration: Duration) -> String {
+        let c = duration.components
+        return String(format: "%.1fs", Double(c.seconds) + Double(c.attoseconds) / 1_000_000_000_000_000_000)
     }
 
     static func configureFakeCodeIntelligence(
@@ -595,10 +752,9 @@ final class RuntimeServiceHost: @unchecked Sendable {
         return fake
     }
 
-    func run() throws {
-        try server.start()
-        stopSemaphore.wait()
-    }
+     func run() throws {
+         stopSemaphore.wait()
+     }
 }
 
 enum RuntimeProcess {
@@ -609,9 +765,9 @@ enum RuntimeProcess {
             return
         }
         let ownURL = URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
-        let launcher = ownURL.deletingLastPathComponent().appendingPathComponent("slta-runtime")
+        let launcher = ownURL.deletingLastPathComponent().appendingPathComponent("stacyagent-runtime")
         guard FileManager.default.isExecutableFile(atPath: launcher.path) else {
-            throw CLIError("slta-runtime executable not found beside mlxagent")
+            throw CLIError("stacyagent-runtime executable not found beside mlxagent")
         }
         let process = Process()
         process.executableURL = launcher
@@ -650,7 +806,7 @@ enum RuntimeProcess {
             // The launcher may lose the ownership race to another runtime;
             // keep probing the authoritative socket in that case.
         }
-        throw CLIError("slta-runtime did not become ready")
+        throw CLIError("stacyagent-runtime did not become ready")
     }
 }
 
@@ -690,7 +846,7 @@ func runRuntimeServiceMode() {
             let host = try await RuntimeServiceHost.make(options: options, fakeModel: fake)
             try host.run()
         } catch {
-            fputs("slta-runtime: \(error)\n", stderr)
+            fputs("stacyagent-runtime: \(error)\n", stderr)
         }
         semaphore.signal()
     }

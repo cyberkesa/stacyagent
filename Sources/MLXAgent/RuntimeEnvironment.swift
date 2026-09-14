@@ -141,7 +141,7 @@ enum DirectRuntimeRouter {
 
         if fileCapabilityTerms.contains(where: text.contains) ||
            text == "можешь" {
-            return "Да. В рабочем проекте SLTA может читать, создавать и изменять файлы через runtime-инструменты. Эти действия считаются выполненными только после реального tool/evidence."
+            return "Да. В рабочем проекте Stacy Agent может читать, создавать и изменять файлы через runtime-инструменты. Эти действия считаются выполненными только после реального tool/evidence."
         }
 
         let isMCP = text.contains("mcp") || text.contains("мсп")

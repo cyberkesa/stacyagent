@@ -49,7 +49,7 @@ struct SessionPersistence: Sendable {
     init(projectPath: String) {
         let fm = FileManager.default
         let base = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent(".slta", isDirectory: true)
+            .appendingPathComponent(".stacyagent", isDirectory: true)
             .appendingPathComponent("sessions", isDirectory: true)
 
         let projectName = URL(fileURLWithPath: projectPath)

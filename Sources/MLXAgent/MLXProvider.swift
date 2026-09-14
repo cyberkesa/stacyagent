@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 import HuggingFace
 import MLXHuggingFace
 import MLXLLM
@@ -26,59 +26,70 @@ import Tokenizers
 // streamDetails call, fully visible to the runtime.
 
 public final class MLXProvider: ModelProvider, @unchecked Sendable {
-    let providerID = ModelProviderID("mlx-local")
-    let modelID: String
-    let capabilities = ModelCapabilities(
-        supportsNativeToolCalls: true,
-        maxContextTokens: nil,
-        supportsVision: false
-    )
-
-    private let model: ModelContainer
-    private let speculative: SpeculativeDecodingConfig?
-    private let events: EventBus
-    private let timeoutSeconds: Int
-    private let chatMaxTokens: Int?
-    private let agentMaxTokens: Int?
-    private let controllerTimeoutSeconds: Int
-    private var debug = false
-
-    private let sessionLock = NSLock()
-    private var taskSession: ChatSession?
-    private let outbox = GenerationOutbox()
-
-    init(
-        modelID: String,
-        draftModelID: String? = nil,
-        events: EventBus,
-        chatMaxTokens: Int? = nil,
-        agentMaxTokens: Int? = nil,
-        timeoutSeconds: Int = 0,
-        controllerTimeoutSeconds: Int = 4
-    ) async throws {
-        self.modelID = modelID
-        self.events = events
-        self.timeoutSeconds = timeoutSeconds
-        self.chatMaxTokens = chatMaxTokens
-        self.agentMaxTokens = agentMaxTokens
-        self.controllerTimeoutSeconds = controllerTimeoutSeconds
-
-        await events.emit(.modelLoading)
-        let configuration = ModelConfiguration(id: modelID)
-        let main = try await #huggingFaceLoadModelContainer(configuration: configuration)
-        self.model = main
-
-        if let draftModelID {
-            await events.emit(.notice("loading draft model for speculative decoding"))
-            let draftConfig = ModelConfiguration(id: draftModelID)
-            let draft = try await #huggingFaceLoadModelContainer(configuration: draftConfig)
-            self.speculative = SpeculativeDecodingConfig(draftModel: draft, numDraftTokens: 5)
-        } else {
-            self.speculative = nil
-        }
-
-        await events.emit(.modelReady)
-    }
+     let providerID = ModelProviderID("mlx-local")
+     let modelID: String
+     let capabilities = ModelCapabilities(
+         supportsNativeToolCalls: true,
+         maxContextTokens: nil,
+         supportsVision: false
+     )
+ 
+     private let model: ModelContainer
+     private let speculative: SpeculativeDecodingConfig?
+     private let events: EventBus
+     private let timeoutSeconds: Int
+     private let chatMaxTokens: Int?
+     private let agentMaxTokens: Int?
+     private let controllerTimeoutSeconds: Int
+     private var debug = false
+ 
+     private let sessionLock = NSLock()
+     private var taskSession: ChatSession?
+     private let outbox = GenerationOutbox()
+ 
+     init(
+         modelID: String,
+         draftModelID: String? = nil,
+         events: EventBus,
+         chatMaxTokens: Int? = nil,
+         agentMaxTokens: Int? = nil,
+         timeoutSeconds: Int = 0,
+         controllerTimeoutSeconds: Int = 4
+     ) async throws {
+         self.modelID = modelID
+         self.events = events
+         self.timeoutSeconds = timeoutSeconds
+         self.chatMaxTokens = chatMaxTokens
+         self.agentMaxTokens = agentMaxTokens
+         self.controllerTimeoutSeconds = controllerTimeoutSeconds
+ 
+         let startTime = ContinuousClock.now
+         await events.emit(.modelLoading)
+         fputs("[MLXProvider] init start, modelID=\(modelID)\n", stderr)
+ 
+         let configuration = try Self.resolveConfiguration(modelID: modelID)
+         fputs("[MLXProvider] resolved model path: \(Self.describeConfiguration(configuration))\n", stderr)
+ 
+         fputs("[MLXProvider] BEFORE huggingFaceLoadModelContainer\n", stderr)
+         let beforeLoad = ContinuousClock.now
+         let main = try await #huggingFaceLoadModelContainer(configuration: configuration)
+         let loadDuration = beforeLoad.duration(to: ContinuousClock.now)
+         fputs("[MLXProvider] AFTER huggingFaceLoadModelContainer (\(Self.durationString(loadDuration)))\n", stderr)
+         self.model = main
+ 
+         if let draftModelID {
+             await events.emit(.notice("loading draft model for speculative decoding"))
+             let draftConfig = ModelConfiguration(id: draftModelID)
+             let draft = try await #huggingFaceLoadModelContainer(configuration: draftConfig)
+             self.speculative = SpeculativeDecodingConfig(draftModel: draft, numDraftTokens: 5)
+         } else {
+             self.speculative = nil
+         }
+ 
+         let totalMs = UInt64(max(0, Self.seconds(startTime.duration(to: ContinuousClock.now)) * 1000))
+         fputs("[MLXProvider] init complete, total \(totalMs)ms\n", stderr)
+         await events.emit(.modelReady)
+     }
 
     func toggleDebug() -> Bool {
         debug.toggle()
@@ -273,17 +284,71 @@ public final class MLXProvider: ModelProvider, @unchecked Sendable {
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(timeout))
-                throw SLTAError.io("turn controller timed out after \(timeout)s")
+                throw StacyAgentError.io("turn controller timed out after \(timeout)s")
             }
             guard let value = try await group.next() else {
-                throw SLTAError.io("turn controller returned no decision")
+                throw StacyAgentError.io("turn controller returned no decision")
             }
             group.cancelAll()
             return value
         }
     }
 
-    // MARK: - Private plumbing
+     // MARK: - Local cache resolution
+ 
+     private static func resolveConfiguration(modelID: String) throws -> ModelConfiguration {
+         if let localPath = try Self.localCachePath(for: modelID) {
+             fputs("[MLXProvider] using local cache: \(localPath)\n", stderr)
+             return ModelConfiguration(directory: localPath)
+         }
+         return ModelConfiguration(id: modelID)
+     }
+ 
+     private static func localCachePath(for modelID: String) throws -> URL? {
+         let parts = modelID.split(separator: "/")
+         guard parts.count == 2 else { return nil }
+         let cacheBase = try Self.huggingFaceCacheDirectory()
+         let hfDir = cacheBase
+             .appendingPathComponent("models--\(parts[0])--\(parts[1])")
+         let refsFile = hfDir.appendingPathComponent("refs/main")
+         guard FileManager.default.fileExists(atPath: refsFile.path),
+               let commit = try? String(contentsOf: refsFile, encoding: .utf8)
+                 .trimmingCharacters(in: .whitespacesAndNewlines),
+               !commit.isEmpty else { return nil }
+         let snapshotDir = hfDir.appendingPathComponent("snapshots")
+             .appendingPathComponent(commit)
+         guard FileManager.default.fileExists(atPath: snapshotDir.path) else { return nil }
+         return snapshotDir
+     }
+ 
+     static func huggingFaceCacheDirectory() throws -> URL {
+         if let env = ProcessInfo.processInfo.environment["HF_HUB_CACHE"] {
+             return URL(fileURLWithPath: env)
+         }
+         if let env = ProcessInfo.processInfo.environment["HF_HOME"] {
+             return URL(fileURLWithPath: env).appendingPathComponent("hub")
+         }
+         let home = FileManager.default.homeDirectoryForCurrentUser
+         let candidate = home.appendingPathComponent(".cache/huggingface/hub")
+         if FileManager.default.fileExists(atPath: candidate.path) { return candidate }
+         let sandbox = home.appendingPathComponent(
+             "Library/Caches/huggingface/hub"
+         )
+         if FileManager.default.fileExists(atPath: sandbox.path) { return sandbox }
+         throw StacyAgentError.io("cannot locate HuggingFace cache directory")
+     }
+ 
+     private static func describeConfiguration(_ config: ModelConfiguration) -> String {
+         switch config.id {
+         case .id(let id, let revision): return "id:\(id)@\(revision)"
+         case .directory(let url): return "dir:\(url.path)"
+         }
+     }
+ 
+     static func durationString(_ duration: Duration) -> String {
+         let c = duration.components
+         return String(format: "%.1fs", Double(c.seconds) + Double(c.attoseconds) / 1_000_000_000_000_000_000)
+     }
 
     /// Native calls observed on the LAST single generation. Because
     /// toolDispatch is nil, ChatSession does not consume them; they arrive
@@ -388,7 +453,7 @@ public final class MLXProvider: ModelProvider, @unchecked Sendable {
                         guard let heartbeat else { throw CancellationError() }
                         let idle = heartbeat.idleSeconds()
                         if idle >= Double(stallTimeout) {
-                            throw SLTAError.io(String(
+                            throw StacyAgentError.io(String(
                                 format: "generation stalled for %.1fs (optional watchdog %ds)",
                                 idle,
                                 stallTimeout
@@ -400,7 +465,7 @@ public final class MLXProvider: ModelProvider, @unchecked Sendable {
             }
 
             guard let first = try await group.next() else {
-                throw SLTAError.io("generation returned no result")
+                throw StacyAgentError.io("generation returned no result")
             }
             group.cancelAll()
             return first

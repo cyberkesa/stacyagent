@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 import MLXLMCommon
 
 final class ToolRegistry: @unchecked Sendable {
@@ -994,7 +994,7 @@ final class ToolRegistry: @unchecked Sendable {
             }
             // v0.28 runtime stream: mutation and validation evidence as
             // structured events (additive; existing UI ignores unknown cases
-            // except TerminalUI's one-line arms).
+            // except single-line command arms).
             let doneTaskID = before.spec.map { "\($0.id)" } ?? "no-task"
             if SemanticToolCatalog.isMutating(name), let path = args["path"] {
                 let tx = workspace.latestEditReceipt(path: path).map { "\($0)" } ?? compact(result)
@@ -1286,7 +1286,7 @@ extension ToolRegistry {
     }
 
     /// External-change stream: read-only tools that observe a moved current
-    /// revision caused by disk edits outside SLTA.
+    /// revision caused by disk edits outside Stacy Agent.
     fileprivate func emitExternalIfMoved(
         key: String,
         before: ArtifactRevisionID?,

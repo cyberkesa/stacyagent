@@ -9,8 +9,8 @@ import Foundation
 // revision records (with content hashes) re-anchor evidence after restart.
 //
 // Layout reuses the SessionPersistence project-key scheme
-// (projectName-fnv1a) under ~/.slta/runtime/<key>/ — no conflict with
-// ~/.slta/sessions/ or ~/.slta/edit-history/.
+// (projectName-fnv1a) under ~/.stacyagent/runtime/<key>/ — no conflict with
+// ~/.stacyagent/sessions/ or ~/.stacyagent/edit-history/.
 
 struct PersistedRuntimeState: Codable, Sendable {
     var schemaVersion: Int
@@ -37,7 +37,7 @@ struct RuntimePersistence: Sendable {
     init(projectPath: String) {
         let fm = FileManager.default
         let base = fm.homeDirectoryForCurrentUser
-            .appendingPathComponent(".slta", isDirectory: true)
+            .appendingPathComponent(".stacyagent", isDirectory: true)
             .appendingPathComponent("runtime", isDirectory: true)
         let projectName = URL(fileURLWithPath: projectPath)
             .lastPathComponent

@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 
 struct ArtifactRevisionID: Hashable, Codable, Sendable, CustomStringConvertible {
     let rawValue: UUID
@@ -282,7 +282,7 @@ final class RevisionStore: @unchecked Sendable {
         )
 
         if let data = try? Data(contentsOf: metadataURL),
-           let decoded = try? JSONDecoder.slta.decode(RevisionStoreState.self, from: data) {
+           let decoded = try? JSONDecoder.stacyagent.decode(RevisionStoreState.self, from: data) {
             self.state = decoded
         } else {
             self.state = RevisionStoreState()
@@ -486,7 +486,7 @@ final class CheckpointStore: @unchecked Sendable {
         try? fm.createDirectory(at: root, withIntermediateDirectories: true)
 
         if let data = try? Data(contentsOf: metadataURL),
-           let decoded = try? JSONDecoder.slta.decode(CheckpointStoreState.self, from: data) {
+           let decoded = try? JSONDecoder.stacyagent.decode(CheckpointStoreState.self, from: data) {
             self.state = decoded
         } else {
             self.state = CheckpointStoreState()
@@ -588,7 +588,7 @@ final class EditEngine: @unchecked Sendable {
         } else {
             let home = FileManager.default.homeDirectoryForCurrentUser
             baseRoot = home
-                .appendingPathComponent(".slta", isDirectory: true)
+                .appendingPathComponent(".stacyagent", isDirectory: true)
                 .appendingPathComponent("edit-history", isDirectory: true)
                 .appendingPathComponent(Self.stableProjectKey(projectRoot.path), isDirectory: true)
         }
@@ -605,7 +605,7 @@ final class EditEngine: @unchecked Sendable {
         try? fm.createDirectory(at: baseRoot, withIntermediateDirectories: true)
 
         if let data = try? Data(contentsOf: transactionsURL),
-           let decoded = try? JSONDecoder.slta.decode(EditTransactionStoreState.self, from: data) {
+           let decoded = try? JSONDecoder.stacyagent.decode(EditTransactionStoreState.self, from: data) {
             self.transactionState = decoded
         } else {
             self.transactionState = EditTransactionStoreState()
@@ -1183,7 +1183,7 @@ private extension JSONEncoder {
 
 
 private extension JSONDecoder {
-    static var slta: JSONDecoder {
+    static var stacyagent: JSONDecoder {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601
         return decoder

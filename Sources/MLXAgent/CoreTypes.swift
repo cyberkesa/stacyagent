@@ -1,7 +1,7 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 
-// CLIError теперь из SLTACore (enum SLTAError + typealias CLIError).
+// CLIError теперь из StacyAgentCore (enum StacyAgentError + typealias CLIError).
 // Локальный struct удалён во избежание конфликта имён.
 
 enum ApprovalMode: String, Sendable {
@@ -98,8 +98,6 @@ struct AgentOptions: Sendable {
             case "--help", "-h":
                 printHelp()
                 exit(0)
-            case "--cli":
-                i += 1
             case "--runtime-service", "--fake-runtime":
                 i += 1
             default:

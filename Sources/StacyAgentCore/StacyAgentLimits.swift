@@ -2,7 +2,7 @@ import Foundation
 
 /// Все магические лимиты/таймауты/пути в одном месте.
 /// Значения по умолчанию = текущие хардкоды из Workspace/TaskSemantics/EditEngine.
-public struct SLTALimits: Sendable {
+public struct StacyAgentLimits: Sendable {
     public var listDirMaxEntries = 300
     public var fileMaxBytes = 1_500_000
     public var searchMaxHits = 300
@@ -22,21 +22,21 @@ public struct SLTALimits: Sendable {
 
     public init() {}
 
-    /// Переопределение через env `SLTA_*` без смены CLI.
-    public static func fromEnvironment(_ base: SLTALimits = SLTALimits()) -> SLTALimits {
+    /// Переопределение через env `STACYAGENT_*` без смены CLI.
+    public static func fromEnvironment(_ base: StacyAgentLimits = StacyAgentLimits()) -> StacyAgentLimits {
         var out = base
         let env = ProcessInfo.processInfo.environment
         func int(_ key: String, _ cur: Int) -> Int {
             guard let v = env[key], let n = Int(v), n > 0 else { return cur }
             return n
         }
-        out.listDirMaxEntries = int("SLTA_LIST_MAX", out.listDirMaxEntries)
-        out.fileMaxBytes = int("SLTA_FILE_MAX_BYTES", out.fileMaxBytes)
-        out.searchMaxHits = int("SLTA_SEARCH_MAX", out.searchMaxHits)
-        out.searchTimeoutSeconds = int("SLTA_SEARCH_TIMEOUT", out.searchTimeoutSeconds)
-        out.swiftcTimeoutSeconds = int("SLTA_SWIFTC_TIMEOUT", out.swiftcTimeoutSeconds)
-        out.validateTimeoutSeconds = int("SLTA_VALIDATE_TIMEOUT", out.validateTimeoutSeconds)
-        if let p = env["SLTA_SHELL"], !p.isEmpty { out.shellPath = p }
+        out.listDirMaxEntries = int("STACYAGENT_LIST_MAX", out.listDirMaxEntries)
+        out.fileMaxBytes = int("STACYAGENT_FILE_MAX_BYTES", out.fileMaxBytes)
+        out.searchMaxHits = int("STACYAGENT_SEARCH_MAX", out.searchMaxHits)
+        out.searchTimeoutSeconds = int("STACYAGENT_SEARCH_TIMEOUT", out.searchTimeoutSeconds)
+        out.swiftcTimeoutSeconds = int("STACYAGENT_SWIFTC_TIMEOUT", out.swiftcTimeoutSeconds)
+        out.validateTimeoutSeconds = int("STACYAGENT_VALIDATE_TIMEOUT", out.validateTimeoutSeconds)
+        if let p = env["STACYAGENT_SHELL"], !p.isEmpty { out.shellPath = p }
         return out
     }
 }

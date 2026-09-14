@@ -1,6 +1,6 @@
 import Foundation
 
-enum SLTASelfTest {
+enum StacyAgentSelfTest {
     static func run() async -> String {
         var passed = 0
         var failures: [String] = []
@@ -330,8 +330,8 @@ enum SLTASelfTest {
         )
 
         let externalSession = SessionSnapshot(
-            projectPath: "/tmp/slta-external",
-            persistencePath: "/tmp/slta-external-state",
+            projectPath: "/tmp/stacyagent-external",
+            persistencePath: "/tmp/stacyagent-external-state",
             turns: [],
             ledgerEventCount: 3,
             lastProjectRequest: "Через MCP найди фотографию ночной Москвы",
@@ -577,7 +577,7 @@ for line in sys.stdin:
         )
 
         let tempProject = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-selftest-project", isDirectory: true)
+            .appendingPathComponent("stacyagent-selftest-project", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: tempProject,
             withIntermediateDirectories: true
@@ -654,7 +654,7 @@ for line in sys.stdin:
 
         let loveSession = SessionSnapshot(
             projectPath: tempProject.path,
-            persistencePath: "/tmp/slta-selftest",
+            persistencePath: "/tmp/stacyagent-selftest",
             turns: [
                 SessionTurn(
                     user: "создай html страничку про любовь",
@@ -806,7 +806,7 @@ for line in sys.stdin:
         )
         let afterNewSession = SessionSnapshot(
             projectPath: tempProject.path,
-            persistencePath: "/tmp/slta-selftest",
+            persistencePath: "/tmp/stacyagent-selftest",
             turns: loveSession.turns,
             ledgerEventCount: 8,
             lastProjectRequest: loveSession.lastProjectRequest,
@@ -840,7 +840,7 @@ for line in sys.stdin:
 
         let noEvidenceSession = SessionSnapshot(
             projectPath: tempProject.path,
-            persistencePath: "/tmp/slta-selftest",
+            persistencePath: "/tmp/stacyagent-selftest",
             turns: loveSession.turns,
             ledgerEventCount: 9,
             lastProjectRequest: loveSession.lastProjectRequest,
@@ -995,7 +995,7 @@ for line in sys.stdin:
         // not fall all the way back to the original create request.
         let persistenceProject = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "slta-persist-\(UUID().uuidString)",
+                "stacyagent-persist-\(UUID().uuidString)",
                 isDirectory: true
             )
         try? FileManager.default.createDirectory(
@@ -1133,7 +1133,7 @@ for line in sys.stdin:
 
         let readOnlySession = SessionSnapshot(
             projectPath: tempProject.path,
-            persistencePath: "/tmp/slta-selftest",
+            persistencePath: "/tmp/stacyagent-selftest",
             turns: [],
             ledgerEventCount: 1,
             lastProjectRequest: "Проверь main.py",
@@ -1158,9 +1158,9 @@ for line in sys.stdin:
 
         // v0.26 — Edit Engine / revision / checkpoint / ranged I/O regression suite.
         let editProject = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-edit-selftest-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-edit-selftest-\(UUID().uuidString)", isDirectory: true)
         let editHistory = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-edit-history-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-edit-history-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(
             at: editProject,
             withIntermediateDirectories: true
@@ -1464,8 +1464,8 @@ for line in sys.stdin:
         recoveryArtifact.wasOpened = true
 
         let recoverySession = SessionSnapshot(
-            projectPath: "/tmp/slta-recovery",
-            persistencePath: "/tmp/slta-recovery-state",
+            projectPath: "/tmp/stacyagent-recovery",
+            persistencePath: "/tmp/stacyagent-recovery-state",
             turns: [],
             ledgerEventCount: 4,
             lastProjectRequest: "Создай открытку",
@@ -1614,7 +1614,7 @@ for line in sys.stdin:
         )
 
         let capabilityRuntime = RuntimeEnvironment.probe(
-            projectURL: URL(fileURLWithPath: "/tmp/slta-recovery", isDirectory: true)
+            projectURL: URL(fileURLWithPath: "/tmp/stacyagent-recovery", isDirectory: true)
         )
         check(
             DirectRuntimeRouter.answer(
@@ -1671,8 +1671,8 @@ for line in sys.stdin:
         liveArtifact.wasOpened = true
 
         let liveSession = SessionSnapshot(
-            projectPath: "/tmp/slta-live",
-            persistencePath: "/tmp/slta-live-state",
+            projectPath: "/tmp/stacyagent-live",
+            persistencePath: "/tmp/stacyagent-live-state",
             turns: [],
             ledgerEventCount: 8,
             lastProjectRequest: "Создай live.html минимум 500 строк и открой его",
@@ -1759,12 +1759,12 @@ for line in sys.stdin:
 
         let invariantProject = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "slta-invariant-selftest-\(UUID().uuidString)",
+                "stacyagent-invariant-selftest-\(UUID().uuidString)",
                 isDirectory: true
             )
         let invariantHistory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
-                "slta-invariant-history-\(UUID().uuidString)",
+                "stacyagent-invariant-history-\(UUID().uuidString)",
                 isDirectory: true
             )
         try? FileManager.default.createDirectory(
@@ -1960,7 +1960,7 @@ for line in sys.stdin:
             }
         }
 
-        // v0.30 §21 real LSP integration (opt-in via SLTA_LSP_INTEGRATION=1).
+        // v0.30 §21 real LSP integration (opt-in via STACYAGENT_LSP_INTEGRATION=1).
         for result in await LSPIntegrationSelfTest.runIfEnabled() {
             if result.passed {
                 passed += 1
@@ -1971,9 +1971,9 @@ for line in sys.stdin:
 
         let total = passed + failures.count
         if failures.isEmpty {
-            return "SLTA self-test: PASS \(passed)/\(total)"
+            return "Stacy Agent self-test: PASS \(passed)/\(total)"
         }
 
-        return "SLTA self-test: FAIL \(passed)/\(total) · " + failures.joined(separator: "; ")
+        return "Stacy Agent self-test: FAIL \(passed)/\(total) · " + failures.joined(separator: "; ")
     }
 }

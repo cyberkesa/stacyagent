@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 
 // v0.28: the ModelContainer-based classifier moved into MLXProvider
 // (MLXProvider.classify). This file keeps the runtime-owned, model-free

@@ -3,7 +3,7 @@ import Foundation
 // MARK: - v0.28 RuntimeCoordinator deterministic tests (A-G)
 //
 // No MLX model. Real TaskCompiler + real RuntimeState + real ProtocolEngine,
-// scripted RuntimeToolExecutor, FakeModelProvider. Collected by SLTASelfTest.
+// scripted RuntimeToolExecutor, FakeModelProvider. Collected by StacyAgentSelfTest.
 
 struct CoordinatorCheckResult {
     var passed: Bool

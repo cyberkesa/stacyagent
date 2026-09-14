@@ -1,7 +1,7 @@
 import Foundation
 
-/// Типизированные ошибки SLTA. Замена строковым `CLIError("...")`.
-public enum SLTAError: Error, LocalizedError, CustomStringConvertible, Sendable {
+/// Типизированные ошибки Stacy Agent. Замена строковым `CLIError("...")`.
+public enum StacyAgentError: Error, LocalizedError, CustomStringConvertible, Sendable {
     case invalidOption(String)
     case projectNotFound(String)
     case fileNotFound(String)
@@ -42,10 +42,10 @@ public enum SLTAError: Error, LocalizedError, CustomStringConvertible, Sendable 
 }
 
 /// Совместимость: старый строковый тип остаётся алиасом новых кейсов.
-public typealias CLIError = SLTAError
+public typealias CLIError = StacyAgentError
 
-public extension SLTAError {
+public extension StacyAgentError {
     /// Совместимость со старым `CLIError("текст")`.
     init(_ message: String) { self = .io(message) }
-    static func cli(_ message: String) -> SLTAError { .io(message) }
+    static func cli(_ message: String) -> StacyAgentError { .io(message) }
 }

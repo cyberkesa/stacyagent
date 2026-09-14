@@ -198,7 +198,7 @@ final class ArtifactGraph: @unchecked Sendable {
         }
     }
 
-    /// First sight of a path (read before any SLTA mutation): adopt the
+    /// First sight of a path (read before any Stacy Agent mutation): adopt the
     /// observed revision as current WITHOUT bumping (reads never create
     /// new current revisions).
     func adoptIfUnknown(

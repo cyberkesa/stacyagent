@@ -1,5 +1,5 @@
 import Foundation
-import SLTACore
+import StacyAgentCore
 import MLXLMCommon
 
 public struct MCPToolDescriptor: Sendable {
@@ -157,14 +157,14 @@ private final class MCPConnection: @unchecked Sendable {
             _ = try sendRequest(method: "initialize", params: [
                 "protocolVersion": requestedVersion,
                 "capabilities": [:],
-                "clientInfo": ["name": "SLTA", "version": "0.27"]
+                "clientInfo": ["name": "Stacy Agent", "version": "0.27"]
             ])
         } catch {
             if requestedVersion != fallbackVersion {
                 _ = try sendRequest(method: "initialize", params: [
                     "protocolVersion": fallbackVersion,
                     "capabilities": [:],
-                    "clientInfo": ["name": "SLTA", "version": "0.27"]
+                    "clientInfo": ["name": "Stacy Agent", "version": "0.27"]
                 ])
             } else {
                 throw error
@@ -187,7 +187,7 @@ private final class MCPConnection: @unchecked Sendable {
             if message["method"] != nil, let serverID = message["id"] {
                 try writeMessage([
                     "jsonrpc": "2.0", "id": serverID,
-                    "error": ["code": -32601, "message": "Client method is not supported by SLTA"]
+                    "error": ["code": -32601, "message": "Client method is not supported by Stacy Agent"]
                 ])
             }
         }
@@ -270,8 +270,8 @@ final class MCPBridge: @unchecked Sendable {
     init(policy: PolicyEngine) {
         self.policy = policy
         let candidateURLs = [
-            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".slta/mcp.json"),
-            fm.homeDirectoryForCurrentUser.appendingPathComponent(".slta").appendingPathComponent("mcp.json"),
+            URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".stacyagent/mcp.json"),
+            fm.homeDirectoryForCurrentUser.appendingPathComponent(".stacyagent").appendingPathComponent("mcp.json"),
             fm.homeDirectoryForCurrentUser.appendingPathComponent(".cursor").appendingPathComponent("mcp.json"),
             fm.homeDirectoryForCurrentUser.appendingPathComponent(".mlxagent").appendingPathComponent("mcp.json")
         ]

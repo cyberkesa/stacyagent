@@ -1,7 +1,7 @@
 import Foundation
 import Darwin
 import Testing
-@testable import SLTAIPC
+@testable import StacyAgentIPC
 
 private final class SnapshotBox: @unchecked Sendable {
     private let lock = NSLock()
@@ -12,7 +12,7 @@ private final class SnapshotBox: @unchecked Sendable {
 
 private func temporaryWorkspace() throws -> URL {
     let url = FileManager.default.temporaryDirectory
-        .appendingPathComponent("slta-ipc-test-\(UUID().uuidString)", isDirectory: true)
+        .appendingPathComponent("stacyagent-ipc-test-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
 }
@@ -79,7 +79,7 @@ func versionMismatch() async throws {
     defer { try? FileManager.default.removeItem(at: workspace) }
     let socket = WorkspaceIdentity.socketURL(for: workspace)
     let server = UnixSocketServer(socketURL: socket) { envelope, _ in
-        if envelope.protocolVersion != SLTAIPCProtocolVersion {
+        if envelope.protocolVersion != StacyAgentIPCProtocolVersion {
             return IPCEnvelope(
                 requestID: envelope.requestID, workspaceID: envelope.workspaceID,
                 kind: .error,
@@ -174,21 +174,22 @@ func workspaceOwnership() throws {
     recovered.release()
 }
 
-@Test("K production GUI and CLI are IPC-only")
-func productionWiringIsIPCOnly() throws {
+@Test("K legacy GUI and CLI are absent from the runtime backend")
+func productionWiringIsRuntimeOnly() throws {
     let testFile = URL(fileURLWithPath: #filePath)
     let root = testFile.deletingLastPathComponent()
         .deletingLastPathComponent().deletingLastPathComponent()
-    let files = [
-        root.appendingPathComponent("Sources/MLXAgent/MLXAgentMain.swift"),
-        root.appendingPathComponent("Sources/MLXAgent/AgentGUI.swift")
-    ]
-    for file in files {
-        let source = try String(contentsOf: file, encoding: .utf8)
-        for constructor in ["Workspace", "RuntimeCoordinator", "MLXProvider"] {
-            let regex = try Regex("\\b\(constructor)\\s*\\(")
-            #expect(source.firstMatch(of: regex) == nil)
-        }
-        #expect(source.contains("RuntimeClient"))
+    let source = try String(
+        contentsOf: root.appendingPathComponent("Sources/MLXAgent/MLXAgentMain.swift"),
+        encoding: .utf8
+    )
+    #expect(source.contains("runRuntimeServiceMode()"))
+    #expect(source.contains("launch Stacy Agent.app instead"))
+    #expect(!source.contains("NSApplication"))
+    #expect(!source.contains("runCLIMode"))
+    for legacyUI in ["AgentGUI.swift", "TerminalUI.swift"] {
+        #expect(!FileManager.default.fileExists(
+            atPath: root.appendingPathComponent("Sources/MLXAgent/\(legacyUI)").path
+        ))
     }
 }

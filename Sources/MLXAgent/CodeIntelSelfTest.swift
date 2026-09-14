@@ -19,7 +19,7 @@ enum CodeIntelSelfTest {
         -> (URL, Workspace, RuntimeState, RuntimeEnvironment, PolicyEngine)
     {
         let dir = FileManager.default.temporaryDirectory
-            .appendingPathComponent("slta-ci-\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("stacyagent-ci-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         for (name, content) in files {
             try Data(content.utf8).write(to: dir.appendingPathComponent(name))
