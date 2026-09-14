@@ -96,6 +96,8 @@ enum TaskKind: String, Hashable, Sendable, Codable {
     case operate
     case externalAction
     case converse
+    /// v0.30 structural rename resolved deterministically (zero-model path).
+    case rename
 }
 
 enum DesiredState: String, Hashable, Sendable, Codable {
@@ -239,14 +241,17 @@ enum TaskRequirement: Hashable, Sendable, Codable, CustomStringConvertible {
     case readBack(TargetSelector)
     case externalEffect
     case externalArtifact(ArtifactType)
+    /// v0.30 structural rename intent (symbol, new name, optional file scope).
+    case semanticRename(symbol: String, newName: String, path: String?)
 
     private enum Code: String, Codable {
         case observe, observeAfterMutation, mutate, mutateCount, launch
         case inspectBeforeLaunch, validate, readBack, externalEffect, externalArtifact
+        case semanticRename
     }
 
     private enum CodingKeys: String, CodingKey {
-        case code, target, count, artifact
+        case code, target, count, artifact, symbol, newName, path
     }
 
     init(from decoder: Decoder) throws {
@@ -274,6 +279,12 @@ enum TaskRequirement: Hashable, Sendable, Codable, CustomStringConvertible {
         case .externalEffect: self = .externalEffect
         case .externalArtifact:
             self = .externalArtifact(try container.decode(ArtifactType.self, forKey: .artifact))
+        case .semanticRename:
+            self = .semanticRename(
+                symbol: try container.decode(String.self, forKey: .symbol),
+                newName: try container.decode(String.self, forKey: .newName),
+                path: try container.decodeIfPresent(String.self, forKey: .path)
+            )
         }
     }
 
@@ -310,6 +321,11 @@ enum TaskRequirement: Hashable, Sendable, Codable, CustomStringConvertible {
         case .externalArtifact(let type):
             try container.encode(Code.externalArtifact, forKey: .code)
             try container.encode(type, forKey: .artifact)
+        case .semanticRename(let symbol, let newName, let path):
+            try container.encode(Code.semanticRename, forKey: .code)
+            try container.encode(symbol, forKey: .symbol)
+            try container.encode(newName, forKey: .newName)
+            try container.encodeIfPresent(path, forKey: .path)
         }
     }
 
@@ -335,6 +351,8 @@ enum TaskRequirement: Hashable, Sendable, Codable, CustomStringConvertible {
             return "perform external effect"
         case .externalArtifact(let type):
             return "obtain external \(type.rawValue) URL"
+        case .semanticRename(let symbol, let newName, let path):
+            return "rename \(symbol) to \(newName)" + (path.map { " in \($0)" } ?? "")
         }
     }
 }
@@ -730,6 +748,40 @@ struct EvidenceStore: Sendable {
                     Self.externalURL(url, matches: type, operation: operation)
                 }
             }
+
+        case .semanticRename(let symbol, let newName, let path):
+            // A structural completion record with matching identity.
+            // Freshness (per-path current revisions) is enforced separately.
+            return records.contains { record in
+                guard record.kind == .semantic,
+                      record.symbol == symbol,
+                      record.newName == newName else {
+                    return false
+                }
+                if let path {
+                    return record.paths.contains(path) || record.path == path
+                }
+                return true
+            }
+        }
+    }
+
+    /// Semantic completions matching an intent (freshness-checked by caller).
+    func semanticCompletions(
+        symbol: String,
+        newName: String,
+        path: String?
+    ) -> [EvidenceRecord] {
+        records.filter { record in
+            guard record.kind == .semantic,
+                  record.symbol == symbol,
+                  record.newName == newName else {
+                return false
+            }
+            if let path {
+                return record.paths.contains(path) || record.path == path
+            }
+            return true
         }
     }
 
@@ -774,6 +826,25 @@ struct EvidenceStore: Sendable {
             // Mutations create revisions (revision-agnostic counting);
             // external effects are pathless.
             return true
+        case .semanticRename(let symbol, let newName, let path):
+            // Fresh only when EVERY resulting path is still current.
+            // An empty revision map means the completion predates tracking:
+            // never fresh (re-resolve instead of trusting it).
+            let matches = records.filter { record in
+                guard record.kind == .semantic,
+                      record.symbol == symbol,
+                      record.newName == newName else {
+                    return false
+                }
+                if let path {
+                    return record.paths.contains(path) || record.path == path
+                }
+                return true
+            }
+            guard !matches.isEmpty else { return false }
+            return matches.contains { record in
+                !record.revisions.isEmpty && record.revisionsAllCurrent(current)
+            }
         }
     }
 
@@ -1013,6 +1084,24 @@ enum TaskCompiler {
             failureKind == .functional ||
             implicitFocusedMutation
 
+        // v0.30 explicit structural rename: deterministic zero-model intent.
+        // Narrow recognizer only (anything vague falls through to the
+        // normal model-driven flow below).
+        if decision.mode == .agent || decision.mode == .inspect {
+            if let rename = SemanticRenameIntent.parse(userText) {
+                kinds.insert(.rename)
+                desired.insert(.modified)
+                appendUnique(
+                    .semanticRename(
+                        symbol: rename.symbol,
+                        newName: rename.newName,
+                        path: rename.path
+                    ),
+                    to: &requirements
+                )
+            }
+        }
+
         if decision.mode == .chat {
             kinds.insert(.converse)
         }
@@ -1215,7 +1304,10 @@ enum TaskCompiler {
                decision.mode == .agent &&
                !kinds.contains(.run) &&
                !kinds.contains(.modify) &&
-               !kinds.contains(.create)
+               !kinds.contains(.create) &&
+               // v0.30 structural rename completes with a deterministic
+               // ack: no synthesis prose (zero-model path).
+               !kinds.contains(.rename)
            ) {
             outputPolicy = .synthesis
         } else {

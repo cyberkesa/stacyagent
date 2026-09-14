@@ -1903,6 +1903,31 @@ for line in sys.stdin:
             }
         }
 
+        // v0.30 Code Intelligence deterministic scenarios A-L.
+        for result in await CodeIntelSelfTest.runAll() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+        for result in await CodeIntelSelfTest.runRename() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
+        // v0.30 §21 real LSP integration (opt-in via SLTA_LSP_INTEGRATION=1).
+        for result in await LSPIntegrationSelfTest.runIfEnabled() {
+            if result.passed {
+                passed += 1
+            } else {
+                failures.append(result.name)
+            }
+        }
+
         let total = passed + failures.count
         if failures.isEmpty {
             return "SLTA self-test: PASS \(passed)/\(total)"

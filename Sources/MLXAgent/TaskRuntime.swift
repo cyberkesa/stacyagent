@@ -554,6 +554,34 @@ actor RuntimeState {
         evidenceStore.records
     }
 
+    /// v0.30 structural completion (rename): ONE canonical record binding
+    /// symbol/newName to per-path resulting revisions, plus its legacy
+    /// projection (keeps the 1:1 items/records invariant).
+    func recordSemanticRename(
+        symbol: String,
+        newName: String,
+        paths: [String],
+        revisions: [String: ArtifactRevisionID]
+    ) {
+        let record = EvidenceRecord(
+            taskID: currentTaskID(),
+            kind: .semantic,
+            tool: "semantic_rename",
+            path: paths.first,
+            revisionID: paths.first.flatMap { revisions[$0]?.rawValue },
+            detail: "rename \(symbol) to \(newName) in \(paths.joined(separator: ", "))",
+            symbol: symbol,
+            newName: newName,
+            paths: paths,
+            revisions: revisions.mapValues { $0.rawValue }
+        )
+        evidenceStore.append(
+            record.legacyEvidence(transaction: nil),
+            revision: paths.first.flatMap { revisions[$0] },
+            record: record
+        )
+    }
+
     private func currentTaskID() -> String {
         spec.map { "\($0.id)" } ?? "no-task"
     }

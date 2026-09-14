@@ -174,6 +174,8 @@ enum EditOperationKind: String, Codable, Sendable {
     case rangeReplace
     case rollback
     case restoreCheckpoint
+    /// v0.30 structural edit applied from a validated SemanticWorkspaceEdit.
+    case semanticEdit
 }
 
 enum EditTransactionStatus: String, Codable, Sendable {
@@ -802,7 +804,8 @@ final class EditEngine: @unchecked Sendable {
             switch $0.proposal.operation {
             case .rollback:
                 return false
-            case .create, .fullReplace, .exactReplace, .rangeReplace, .restoreCheckpoint:
+            case .create, .fullReplace, .exactReplace, .rangeReplace,
+                 .restoreCheckpoint, .semanticEdit:
                 return true
             }
         }

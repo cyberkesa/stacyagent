@@ -4,6 +4,8 @@ enum ProtocolAction: Sendable, CustomStringConvertible {
     case readFile(String)
     case validateFile(String)
     case openFile(String, application: String?)
+    /// v0.30 structural rename (deterministic, zero-model when unambiguous).
+    case semanticRename(symbol: String, newName: String, path: String?)
 
     var toolName: String {
         switch self {
@@ -13,6 +15,8 @@ enum ProtocolAction: Sendable, CustomStringConvertible {
             return "validate_file"
         case .openFile:
             return "open_file"
+        case .semanticRename:
+            return "semantic_rename"
         }
     }
 
@@ -22,14 +26,31 @@ enum ProtocolAction: Sendable, CustomStringConvertible {
              .validateFile(let path),
              .openFile(let path, _):
             return path
+        case .semanticRename(_, _, let path):
+            // Workspace-wide when unscoped; file actions never read this.
+            return path ?? ""
         }
     }
 
     var description: String {
-        "\(toolName) \(path)"
+        switch self {
+        case .semanticRename(let symbol, let newName, let path):
+            return "semantic_rename \(symbol)->\(newName)" + (path.map { " in \($0)" } ?? "")
+        default:
+            return "\(toolName) \(path)"
+        }
     }
 
     var normalizedInvocation: NormalizedToolInvocation {
+        if case .semanticRename(let symbol, let newName, let path) = self {
+            var arguments = ["symbol": symbol, "new_name": newName]
+            if let path { arguments["path"] = path }
+            return NormalizedToolInvocation(
+                name: toolName,
+                arguments: arguments,
+                source: .protocolEngine
+            )
+        }
         var arguments = ["path": path]
         if case .openFile(_, let application) = self,
            let application {
@@ -171,6 +192,14 @@ enum ProtocolEngine {
               !snapshot.isComplete,
               !snapshot.validation.lastToolFailed else {
             return nil
+        }
+
+        // v0.30 structural renames are self-contained deterministic work:
+        // the engine resolves via index, no prior observation required.
+        for requirement in snapshot.missingRequirements {
+            if case .semanticRename(let symbol, let newName, let path) = requirement {
+                return .semanticRename(symbol: symbol, newName: newName, path: path)
+            }
         }
 
         // Observations that unlock intelligence come before mutation.

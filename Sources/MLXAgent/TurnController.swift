@@ -59,6 +59,12 @@ enum FastTurnRouter {
         guard !text.isEmpty else { return .forMode(.chat, source: .fast) }
         let discourse = DiscourseResolver.analyze(original)
 
+        // v0.30 explicit structural rename: deterministic agent work,
+        // routed without spending a model pass (§15 narrow recognizer).
+        if SemanticRenameIntent.parse(original) != nil {
+            return .forMode(.agent, source: .fast)
+        }
+
         // Explicit web/browser work is external even when the user does not know
         // or mention the MCP implementation. Never route it to local INSPECT,
         // which would incorrectly require observation of a project file.

@@ -142,6 +142,20 @@ actor TerminalRenderer: AgentEventSink {
             print("  " + TerminalStyle.dim("· runtime persisted \(projectID)"))
         case .runtimeStateRestored(let projectID):
             print("  " + TerminalStyle.dim("· runtime restored \(projectID)"))
+        case .codeIntelligenceStarted(let provider, let operation):
+            print("  " + TerminalStyle.dim("· \(provider) \(operation)…"))
+        case .codeIntelligenceFinished(let provider, let operation, let ms, let hit, let count):
+            print("  " + TerminalStyle.dim(String(format: "· %@ %@ %.0fms %@ %d", provider, operation, ms, hit ? "cached" : "fresh", count)))
+        case .semanticFactRecorded(let kind, let path, _):
+            print("  " + TerminalStyle.dim("· fact \(kind) \(path)"))
+        case .semanticFactBecameStale(let kind, let path):
+            print("  " + TerminalStyle.dim("· stale \(kind) \(path)"))
+        case .semanticEditPlanned(_, let files, let edits):
+            print("  " + TerminalStyle.dim("· semantic plan \(edits) edits in \(files.count) files"))
+        case .semanticEditApplied(_, let files):
+            print("  " + TerminalStyle.dim("· semantic applied \(files.joined(separator: ", "))"))
+        case .semanticAmbiguityDetected(let symbol, let candidates):
+            print("  " + TerminalStyle.yellow("! ") + TerminalStyle.dim("ambiguous \(symbol): \(candidates.joined(separator: ", "))"))
         }
     }
 

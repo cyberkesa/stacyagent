@@ -28,11 +28,35 @@ final class ToolRegistry: @unchecked Sendable {
     private let tavilySearchTool: Tool<TavilySearchInput, TextOutput>
     private let mcpCallTool: Tool<MCPCallInput, TextOutput>
 
-    init(workspace: Workspace, mcp: MCPBridge, events: EventBus, runtime: RuntimeEnvironment) {
+    /// v0.30 structural code intelligence (rename). Default engine runs a
+    /// lazy LSP backend when sourcekit-lsp exists, nothing otherwise.
+    /// Tests inject an engine with a Fake provider.
+    let codeIntelligence: CodeIntelligenceEngine
+
+    init(
+        workspace: Workspace,
+        mcp: MCPBridge,
+        events: EventBus,
+        runtime: RuntimeEnvironment,
+        codeIntelligence: CodeIntelligenceEngine? = nil
+    ) {
         self.workspace = workspace
         self.mcp = mcp
         self.events = events
         self.runtime = runtime
+        if let codeIntelligence {
+            self.codeIntelligence = codeIntelligence
+        } else {
+            var providers: [any CodeIntelligenceProvider] = []
+            if let lsp = LSPCodeIntelligenceProvider(projectRoot: workspace.root) {
+                providers.append(lsp)
+            }
+            self.codeIntelligence = CodeIntelligenceEngine(
+                workspace: workspace,
+                providers: providers,
+                events: events
+            )
+        }
 
         listDirTool = Tool(
             name: "list_dir",
@@ -288,6 +312,9 @@ final class ToolRegistry: @unchecked Sendable {
         }
         if capabilities.contains(.mcpCall) {
             names.formUnion(["mcp_servers", "mcp_list_tools", "mcp_call", "tavily_search", "open_url"])
+        }
+        if capabilities.contains(.semantic) {
+            names.formUnion(["semantic_rename"])
         }
         return names
     }
@@ -885,6 +912,19 @@ final class ToolRegistry: @unchecked Sendable {
                 result = call.rendered
                 await state.externalSuccess(name, server: server, operation: tool, urls: call.urls)
 
+            case "semantic_rename":
+                guard let symbol = args["symbol"], !symbol.isEmpty,
+                      let newName = args["new_name"] ?? args["newName"],
+                      !newName.isEmpty else {
+                    throw CLIError("semantic_rename requires symbol and new_name")
+                }
+                result = try await executeSemanticRename(
+                    symbol: symbol,
+                    newName: newName,
+                    scope: args["path"],
+                    taskID: taskID
+                )
+
             default:
                 throw CLIError("unknown tool: \(name)")
             }
@@ -1038,6 +1078,12 @@ final class ToolRegistry: @unchecked Sendable {
             return true
         }
 
+        // v0.30 structural operations never fail fatally: ambiguity,
+        // staleness and provider gaps are clarified or retried.
+        if tool == "semantic_rename" {
+            return true
+        }
+
         guard tool == "edit_file" || tool == "edit_file_range" else { return false }
 
         let markers = [
@@ -1123,6 +1169,11 @@ final class ToolRegistry: @unchecked Sendable {
                   Self.integralLine(args["end_line"]) != nil,
                   args["replacement"] != nil else {
                 throw CLIError("edit_file_range requires integer start_line/end_line and replacement")
+            }
+        case "semantic_rename":
+            try require("symbol")
+            guard args["new_name"] ?? args["newName"] != nil else {
+                throw CLIError("semantic_rename requires non-empty new_name")
             }
         case "search":
             try require("query")
@@ -1229,6 +1280,7 @@ extension ToolRegistry {
         let store = RuntimePersistence(projectPath: runtime.projectPath)
         guard let persisted = store.load() else { return false }
         workspace.graph.restore(persisted.artifacts)
+        workspace.graph.restoreGeneration(persisted.artifacts.generation)
         var items: [TaskEvidence] = []
         items.reserveCapacity(persisted.records.count)
         for record in persisted.records {
@@ -1250,5 +1302,99 @@ extension ToolRegistry {
         )
         await events.emit(.runtimeStateRestored(projectID: persisted.projectID))
         return true
+    }
+}
+
+// MARK: - v0.30 semantic rename execution (deterministic, zero-model)
+
+extension ToolRegistry {
+    /// Executes a validated rename plan: snapshot bases (evidence-free),
+    /// all-or-revert apply, per-file post-edit validation, then evidence.
+    /// Failures record NOTHING and return recoverable errors (the task stays
+    /// active; ambiguity is clarified conversationally). Validation failure
+    /// after apply reverts every file first — partial success is never
+    /// presented as completion.
+    fileprivate func executeSemanticRename(
+        symbol: String,
+        newName: String,
+        scope: String?,
+        taskID: String
+    ) async throws -> String {
+        let plan = await codeIntelligence.planRename(
+            symbol: symbol, newName: newName, path: scope, taskID: taskID
+        )
+        switch plan {
+        case .ambiguous(let candidates):
+            let list = candidates.map { "\($0.symbol.path):\($0.symbol.name)" }
+                .joined(separator: ", ")
+            throw CLIError(
+                "semantic ambiguity for \(symbol): \(list). Clarify the file/scope."
+            )
+        case .notFound(let reason):
+            throw CLIError(reason)
+        case .unavailable(let reason):
+            throw CLIError(reason)
+        case .invalid(let reason):
+            throw CLIError(reason)
+        case .ready(let edit):
+            var bases: [String: String] = [:]
+            var preApply: [String: ArtifactRevisionID?] = [:]
+            for item in edit.edits {
+                let key = workspace.canonicalKey(item.path)
+                if bases[key] == nil {
+                    bases[key] = try workspace.readSnapshot(path: key).content
+                }
+                if preApply[key] == nil {
+                    preApply[key] = workspace.graph.currentRevisionID(path: key)
+                }
+            }
+            // Conflict (moved base) throws here: nothing applied, no evidence.
+            let applied = try workspace.applySemanticPlan(edit.edits, contents: bases)
+            let files = applied.keys.sorted()
+            // Post-edit validation on the NEW revisions; revert-all on failure.
+            do {
+                for path in files {
+                    _ = try workspace.validateFile(path)
+                }
+            } catch {
+                for path in files.reversed() {
+                    _ = try? workspace.rollbackLastEdit(path)
+                }
+                let message = "semantic validation failed, reverted: \(error)"
+                await state.recoverableFailure("semantic_rename", message: message)
+                return #"{"ok":false,"error":"\#(escapeJSON(message))","retry":true}"#
+            }
+            var revisions: [String: ArtifactRevisionID] = [:]
+            for path in files {
+                guard let rev = applied[path] else { continue }
+                revisions[path] = rev
+                await state.mutation(
+                    "semantic_rename",
+                    path: path,
+                    content: nil,
+                    changed: true,
+                    transaction: workspace.latestEditReceipt(path: path),
+                    revisionID: rev
+                )
+                await state.validationSuccess(
+                    "validate_file",
+                    isRealValidation: true,
+                    path: path,
+                    revisionID: rev
+                )
+                await emitRevisionEvents(
+                    key: path, before: preApply[path] ?? nil,
+                    taskID: taskID, kind: "mutation"
+                )
+                await events.emit(.validationFinished(path: path, ok: true))
+            }
+            await state.recordSemanticRename(
+                symbol: symbol, newName: newName,
+                paths: files, revisions: revisions
+            )
+            await events.emit(.semanticEditApplied(taskID: taskID, files: files))
+            let filesText = files.joined(separator: ", ")
+            return "renamed \(symbol) to \(newName) in \(filesText)"
+        }
     }
 }

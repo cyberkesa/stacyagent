@@ -35,6 +35,15 @@ enum AgentEvent: Sendable {
     case evidenceBecameStale(taskID: String, path: String)
     case runtimeStatePersisted(projectID: String)
     case runtimeStateRestored(projectID: String)
+
+    // --- v0.30 code intelligence stream (GUI ignores; Workbench IPC later) ---
+    case codeIntelligenceStarted(provider: String, operation: String)
+    case codeIntelligenceFinished(provider: String, operation: String, durationMs: Double, cacheHit: Bool, resultCount: Int)
+    case semanticFactRecorded(kind: String, path: String, revision: String)
+    case semanticFactBecameStale(kind: String, path: String)
+    case semanticEditPlanned(taskID: String, files: [String], edits: Int)
+    case semanticEditApplied(taskID: String, files: [String])
+    case semanticAmbiguityDetected(symbol: String, candidates: [String])
 }
 
 protocol AgentEventSink: Sendable {

@@ -220,6 +220,9 @@ enum ToolCapability: String, Hashable, Sendable {
     case gitRead
     case mcpDiscover
     case mcpCall
+    /// v0.30 structural semantic operations (rename). Granted with
+    /// projectWrite for agent modes; gated by turn capabilities like the rest.
+    case semantic
 }
 
 struct TurnDecision: Sendable {
@@ -235,7 +238,7 @@ struct TurnDecision: Sendable {
             .init(mode: mode, capabilities: [.projectRead, .gitRead], source: source)
         case .agent, .mcpAgent:
             // Полный набор возможностей для кодинга и веб-поиска
-            .init(mode: mode, capabilities: [.projectRead, .projectWrite, .shell, .gitRead, .mcpDiscover, .mcpCall], source: source)
+            .init(mode: mode, capabilities: [.projectRead, .projectWrite, .shell, .gitRead, .mcpDiscover, .mcpCall, .semantic], source: source)
         case .mcpRead:
             .init(mode: mode, capabilities: [.mcpDiscover], source: source)
         }

@@ -137,7 +137,7 @@ public final class RuntimeCoordinator: Sendable {
         let preflight = await executor.advanceProtocol(allowed: allowed)
         deterministicActions += preflight.count
         var evidence = Self.evidenceBlocks(preflight)
-        var snapshot = await executor.taskSnapshot()
+        let snapshot = await executor.taskSnapshot()
         let taskID = Self.taskID(of: snapshot)
         await events.emit(.taskStateChanged(taskID: taskID, phase: snapshot.phase.rawValue))
 
@@ -154,7 +154,7 @@ public final class RuntimeCoordinator: Sendable {
             )
         }
 
-        var synthesisOnly = snapshot.isComplete && snapshot.requiresSynthesis
+        let synthesisOnly = snapshot.isComplete && snapshot.requiresSynthesis
         if synthesisOnly {
             return try await performSynthesis(
                 input: input,
@@ -299,7 +299,9 @@ public final class RuntimeCoordinator: Sendable {
                 ))
 
                 if !response.toolCalls.isEmpty {
-                    consecutiveNoProgress = 0
+                    // No early reset here: the fingerprint comparison below
+                    // resets on real progress and counts genuine stagnation,
+                    // so the >= 2 guard stays live across tool-call rounds.
                     let executed = await executor.executeInvocations(response.toolCalls, allowed: stepTools)
                     toolResults += executed.count
                     evidence = Self.evidenceBlocks(executed)

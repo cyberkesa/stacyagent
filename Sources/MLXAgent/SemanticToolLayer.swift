@@ -6,6 +6,9 @@ enum SemanticToolRole: String, Hashable, Sendable {
     case validate
     case launch
     case external
+    /// v0.30 structural operations (rename): runtime-gated, index-resolved,
+    /// never blocked by observation ordering (no observation needed).
+    case semantic
 }
 
 enum SemanticCachePolicy: String, Sendable {
@@ -280,6 +283,14 @@ enum SemanticToolCatalog {
             .init(
                 name: "open_url",
                 role: .external,
+                deterministic: true,
+                cachePolicy: .none,
+                parallelizable: false,
+                requiresObservedTargetBeforeMutation: false
+            ),
+            .init(
+                name: "semantic_rename",
+                role: .semantic,
                 deterministic: true,
                 cachePolicy: .none,
                 parallelizable: false,

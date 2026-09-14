@@ -21,6 +21,8 @@ enum EvidenceKind: String, Codable, Sendable {
     case test
     case external
     case diagnostic
+    /// v0.30 structural completion (e.g. rename), with per-path revisions.
+    case semantic
 }
 
 struct EvidenceRecord: Codable, Sendable {
@@ -43,6 +45,12 @@ struct EvidenceRecord: Codable, Sendable {
     var server: String?
     var operation: String?
     var urls: [String]
+    // MARK: v0.30 semantic completion linkage
+    var symbol: String?
+    var newName: String?
+    var paths: [String]
+    /// Per-path resulting revisions (path -> revision UUID).
+    var revisions: [String: UUID]
 
     init(
         id: UUID = UUID(),
@@ -57,7 +65,11 @@ struct EvidenceRecord: Codable, Sendable {
         matched: Bool? = nil,
         server: String? = nil,
         operation: String? = nil,
-        urls: [String] = []
+        urls: [String] = [],
+        symbol: String? = nil,
+        newName: String? = nil,
+        paths: [String] = [],
+        revisions: [String: UUID] = [:]
     ) {
         self.id = id
         self.taskID = taskID
@@ -72,6 +84,43 @@ struct EvidenceRecord: Codable, Sendable {
         self.server = server
         self.operation = operation
         self.urls = urls
+        self.symbol = symbol
+        self.newName = newName
+        self.paths = paths
+        self.revisions = revisions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, taskID, kind, tool, path, revisionID, createdAt, detail
+        case changed, matched, server, operation, urls
+        case symbol, newName, paths, revisions
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        taskID = try container.decode(String.self, forKey: .taskID)
+        kind = try container.decode(EvidenceKind.self, forKey: .kind)
+        tool = try container.decode(String.self, forKey: .tool)
+        path = try container.decodeIfPresent(String.self, forKey: .path)
+        revisionID = try container.decodeIfPresent(UUID.self, forKey: .revisionID)
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        detail = try container.decode(String.self, forKey: .detail)
+        changed = try container.decodeIfPresent(Bool.self, forKey: .changed)
+        matched = try container.decodeIfPresent(Bool.self, forKey: .matched)
+        server = try container.decodeIfPresent(String.self, forKey: .server)
+        operation = try container.decodeIfPresent(String.self, forKey: .operation)
+        urls = try container.decodeIfPresent([String].self, forKey: .urls) ?? []
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol)
+        newName = try container.decodeIfPresent(String.self, forKey: .newName)
+        paths = try container.decodeIfPresent([String].self, forKey: .paths) ?? []
+        revisions = try container.decodeIfPresent([String: UUID].self, forKey: .revisions) ?? [:]
+    }
+
+    /// All per-path resulting revisions still current (non-empty).
+    func revisionsAllCurrent(_ current: [String: ArtifactRevisionID]) -> Bool {
+        guard !revisions.isEmpty else { return false }
+        return revisions.allSatisfy { path, id in current[path]?.rawValue == id }
     }
 
     /// Legacy TaskEvidence projection rebuilt from this record on restore.
@@ -99,6 +148,13 @@ struct EvidenceRecord: Codable, Sendable {
                 return .toolFailed(tool: tool, message: String(detail.dropFirst(prefix.count)))
             }
             return .toolFailed(tool: tool, message: detail)
+        case .semantic:
+            return .mutated(
+                tool: tool,
+                path: path ?? paths.first,
+                changed: true,
+                transaction: transaction
+            )
         }
     }
 }

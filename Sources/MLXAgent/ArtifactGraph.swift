@@ -70,6 +70,25 @@ struct PersistedArtifactNode: Codable, Sendable {
 struct PersistedArtifactGraph: Codable, Sendable {
     var schemaVersion: Int
     var nodes: [PersistedArtifactNode]
+    /// v0.30 monotonic semantic generation (defaults to 0 for v0.29 files).
+    var generation: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case schemaVersion, nodes, generation
+    }
+
+    init(schemaVersion: Int, nodes: [PersistedArtifactNode], generation: UInt64 = 0) {
+        self.schemaVersion = schemaVersion
+        self.nodes = nodes
+        self.generation = generation
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        nodes = try container.decode([PersistedArtifactNode].self, forKey: .nodes)
+        generation = try container.decodeIfPresent(UInt64.self, forKey: .generation) ?? 0
+    }
 }
 
 // MARK: - Graph
@@ -89,6 +108,10 @@ final class ArtifactGraph: @unchecked Sendable {
     /// Revision IDs that must never be evicted: referenced by evidence
     /// journal, edit transactions, checkpoints or persisted tasks.
     private var pinned: Set<ArtifactRevisionID> = []
+    /// v0.30 monotonic workspace semantic generation. Bumped on EVERY
+    /// current-revision change (register/markExternal/restore), so
+    /// workspace-scoped semantic facts can detect staleness cheaply.
+    private var semanticGenerationValue: UInt64 = 0
 
     init() {}
 
@@ -138,6 +161,11 @@ final class ArtifactGraph: @unchecked Sendable {
 
     /// Register an EditEngine revision as current for its path.
     /// Returns true when the current pointer actually moved.
+    /// Current semantic generation (monotonic).
+    func semanticGeneration() -> UInt64 {
+        lock.withLock { semanticGenerationValue }
+    }
+
     @discardableResult
     func registerRevision(
         _ revision: ArtifactRevision,
@@ -163,6 +191,9 @@ final class ArtifactGraph: @unchecked Sendable {
                 node.history.append(revision.id)
             }
             nodes[revision.path] = node
+            if moved {
+                semanticGenerationValue &+= 1
+            }
             return moved
         }
     }
@@ -229,6 +260,7 @@ final class ArtifactGraph: @unchecked Sendable {
             node.kind = ArtifactType.infer(path: path)
             node.history.append(revision.id)
             nodes[path] = node
+            semanticGenerationValue &+= 1
             externalRecords[revision.id] = revision
             lastExternal[path] = revision.id
             return revision
@@ -297,13 +329,27 @@ final class ArtifactGraph: @unchecked Sendable {
                     revisions: node.history.compactMap(revisionProvider)
                 )
             }
-            return PersistedArtifactGraph(schemaVersion: Self.schemaVersion, nodes: persisted)
+            return PersistedArtifactGraph(
+                schemaVersion: Self.schemaVersion,
+                nodes: persisted,
+                generation: semanticGenerationValue
+            )
         }
     }
 
     /// IDs currently protected from eviction (diagnostics/tests).
     func pinnedIDs() -> Set<ArtifactRevisionID> {
         lock.withLock { pinned }
+    }
+
+    /// Persisted generation support: caller saves semanticGeneration()
+    /// alongside the graph; restore carries it forward monotonically.
+    func restoreGeneration(_ value: UInt64) {
+        lock.withLock {
+            if value > semanticGenerationValue {
+                semanticGenerationValue = value
+            }
+        }
     }
 
     func restore(_ persisted: PersistedArtifactGraph) {
@@ -332,6 +378,8 @@ final class ArtifactGraph: @unchecked Sendable {
             nodes = rebuilt
             externalRecords = rebuiltExternal
             lastExternal = rebuiltLastExternal
+            // A restore replaces truth: invalidate workspace-scoped facts.
+            semanticGenerationValue &+= 1
         }
     }
 

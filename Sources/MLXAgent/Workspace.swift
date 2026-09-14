@@ -76,7 +76,7 @@ private final class WorkspaceTaskCache: @unchecked Sendable {
     }
 
     func markCreated(_ path: String) {
-        withLock {
+        _ = withLock {
             createdPaths.insert(path)
         }
     }
@@ -232,6 +232,113 @@ final class Workspace: @unchecked Sendable {
             if !key.isEmpty { return key }
         }
         return path
+    }
+
+    /// Sandbox membership without throwing (semantic plan validation).
+    func contains(path: String) -> Bool {
+        (try? resolve(path)) != nil
+    }
+
+    /// Exact revision snapshot for code intelligence: disk content +
+    /// EditEngine base revision, WITHOUT task evidence or task cache.
+    /// External changes are detected and recorded like any other access.
+    func readSnapshot(path: String) throws -> (content: String, revision: ArtifactRevision) {
+        try policy.authorize(tool: "read_file", risk: .read)
+        let url = try resolve(path)
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDirectory),
+              !isDirectory.boolValue else {
+            _ = detectExternalDeletion(key: canonicalKey(path))
+            throw SLTAError.fileNotFound(path)
+        }
+        let attributes = try fm.attributesOfItem(atPath: url.path)
+        if let size = attributes[.size] as? NSNumber, size.intValue > limits.fileMaxBytes {
+            throw SLTAError.fileTooLarge(path: path, limit: limits.fileMaxBytes)
+        }
+        let content = try String(contentsOf: url, encoding: .utf8)
+        let key = canonicalKey(path)
+        _ = detectExternalChange(key: key, url: url, knownContent: content)
+        let revision = try editEngine.observe(path: key, content: content)
+        noteObserved(key: key, revision: revision, content: content)
+        return (content, revision)
+    }
+
+    /// Apply a validated SemanticWorkspaceEdit: ONE EditEngine transaction
+    /// per file (operation .semanticEdit). Validate-all-first, then commit;
+    /// a mid-way commit failure rolls back already-committed files, so a
+    /// logical operation never leaves a partial result behind. NOT
+    /// filesystem-atomic across files (documented): concurrent external
+    /// writers can still interleave between per-file commits.
+    /// Returns new revision IDs per file. Throws RECOVERABLE_CONFLICT when a
+    /// base moved (no partial state survives: committed files are reverted).
+    func applySemanticPlan(
+        _ edits: [SemanticTextEdit],
+        contents: [String: String]
+    ) throws -> [String: ArtifactRevisionID] {
+        // Group per file; contents keyed by canonical path.
+        var byFile: [String: [SemanticTextEdit]] = [:]
+        for edit in edits {
+            let key = canonicalKey(edit.path)
+            byFile[key, default: []].append(edit)
+        }
+        // Phase 1: every file must still be on its expected base.
+        for (key, _) in byFile {
+            let url = try resolve(key)
+            guard let expected = contents[key] else {
+                throw SLTAError.revisionConflict("no base content for \(key)")
+            }
+            try verifyUnchangedBase(url: url, expectedContent: expected,
+                                    expectedExists: true, path: key)
+        }
+        // Phase 2: commit each file as a single transaction.
+        var committed: [(key: String, content: String)] = []
+        var result: [String: ArtifactRevisionID] = [:]
+        do {
+            for (key, items) in byFile.sorted(by: { $0.key < $1.key }) {
+                guard let base = contents[key] else {
+                    throw SLTAError.revisionConflict("no base content for \(key)")
+                }
+                let updated = Self.applyByteEdits(to: base, edits: items)
+                let url = try resolve(key)
+                try verifyUnchangedBase(url: url, expectedContent: base,
+                                        expectedExists: true, path: key)
+                let prepared = try editEngine.prepare(
+                    path: key, before: base, after: updated,
+                    operation: .semanticEdit
+                )
+                do {
+                    try Data(updated.utf8).write(to: url, options: .atomic)
+                    _ = try editEngine.commit(prepared)
+                } catch {
+                    editEngine.reject(prepared)
+                    throw error
+                }
+                taskCache.mutation(targetPath: url.path)
+                noteMutated(key: key, newContent: updated)
+                committed.append((key, updated))
+                if let rev = editEngine.latestRevision(path: key) {
+                    result[key] = rev.id
+                }
+            }
+        } catch {
+            // Logical all-or-revert: undo committed files in reverse order.
+            for (key, _) in committed.reversed() {
+                _ = try? rollbackLastEdit(key)
+            }
+            throw error
+        }
+        return result
+    }
+
+    /// Apply descending byte-offset edits to in-memory content.
+    static func applyByteEdits(to content: String, edits: [SemanticTextEdit]) -> String {
+        var bytes = Array(content.utf8)
+        for edit in edits.sorted(by: { $0.startByteOffset > $1.startByteOffset }) {
+            let start = min(edit.startByteOffset, bytes.count)
+            let end = min(max(edit.endByteOffset, start), bytes.count)
+            bytes.replaceSubrange(start..<end, with: Array(edit.replacement.utf8))
+        }
+        return String(bytes: bytes, encoding: .utf8) ?? content
     }
 
     /// Full revision record: EditEngine history first, graph external markers second.

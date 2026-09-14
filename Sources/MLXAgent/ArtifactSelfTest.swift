@@ -607,6 +607,7 @@ extension ArtifactSelfTest {
                 case .launch: return "launched"
                 case .external: return "externalEffect"
                 case .diagnostic: return "toolFailed"
+                case .semantic: return "mutated"
                 }
             }
             let projectionOK = zip(snapshot.evidence, journal).allSatisfy { item, rec in
@@ -629,7 +630,7 @@ extension ArtifactSelfTest {
             store.clear()
             try? FileManager.default.removeItem(at: store.directory)
             let rtOK = roundTripped?.records.count == journal.count
-            record(countsOK && linkedOK && projectionOK && (rtOK ?? false),
+            record(countsOK && linkedOK && projectionOK && rtOK,
                    "hard-E single evidence source of truth")
         } catch {
             record(false, "hard-E single evidence source of truth")
